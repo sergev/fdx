@@ -6,10 +6,19 @@ import "go.bug.st/serial/enumerator"
 type FloppyAdapter interface {
 	// PrintStatus prints adapter status information to stdout
 	PrintStatus()
+
 	// Read reads the entire floppy disk and writes it to the specified filename
 	Read(filename string) error
+
+	// Write writes data from the specified filename to the floppy disk
+	Write(filename string) error
+
+	// Format formats the floppy disk
+	Format() error
+
+	// Erase erases the floppy disk
+	Erase() error
 }
 
 // NewClientFunc is a function type that creates a new adapter client
 type NewClientFunc func(portDetails *enumerator.PortDetails) (FloppyAdapter, error)
-

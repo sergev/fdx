@@ -57,6 +57,21 @@ func (c *Client) Read(filename string) error {
 	return fmt.Errorf("Read() not yet implemented for SuperCard Pro adapter")
 }
 
+// Write writes data from the specified filename to the floppy disk
+func (c *Client) Write(filename string) error {
+	return fmt.Errorf("Write() not yet implemented for SuperCard Pro adapter")
+}
+
+// Format formats the floppy disk
+func (c *Client) Format() error {
+	return fmt.Errorf("Format() not yet implemented for SuperCard Pro adapter")
+}
+
+// Erase erases the floppy disk
+func (c *Client) Erase() error {
+	return fmt.Errorf("Erase() not yet implemented for SuperCard Pro adapter")
+}
+
 // Close closes the serial port connection
 func (c *Client) Close() error {
 	if c.port != nil {

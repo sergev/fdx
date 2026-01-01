@@ -495,3 +495,18 @@ func (c *Client) Read(filename string) error {
 
 	return nil
 }
+
+// Write writes data from the specified filename to the floppy disk
+func (c *Client) Write(filename string) error {
+	return fmt.Errorf("Write() not yet implemented for Greaseweazle adapter")
+}
+
+// Format formats the floppy disk
+func (c *Client) Format() error {
+	return fmt.Errorf("Format() not yet implemented for Greaseweazle adapter")
+}
+
+// Erase erases the floppy disk
+func (c *Client) Erase() error {
+	return fmt.Errorf("Erase() not yet implemented for Greaseweazle adapter")
+}
