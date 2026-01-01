@@ -990,7 +990,7 @@ func (c *Client) Read(filename string) error {
 	for track := 0; track < 80; track++ {
 		for side := 0; side < 2; side++ {
                         // Print progress message
-                        fmt.Printf("Reading track %d, side %d...\n", track, side)
+                        fmt.Printf("\rReading track %d, side %d...", track, side)
 
 			// Turn on motor and position head
 			err = c.motorOn(side, track)
@@ -1009,10 +1009,9 @@ func (c *Client) Read(filename string) error {
 			if err != nil {
 				return fmt.Errorf("failed to capture stream from track %d, side %d: %w", track, side, err)
 			}
-
-			fmt.Printf("ok\n")
 		}
 	}
+	fmt.Printf(" Done\n")
 
 	// Turn off motor
 	err = c.motorOff()

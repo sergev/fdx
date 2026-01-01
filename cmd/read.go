@@ -17,7 +17,7 @@ var readCmd = &cobra.Command{
 		}
 
 		// Determine output filename
-		filename := "floppy_raw.bin"
+		filename := "image.raw"
 		if len(args) > 0 {
 			filename = args[0]
 		}
@@ -35,4 +35,3 @@ var readCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(readCmd)
 }
-

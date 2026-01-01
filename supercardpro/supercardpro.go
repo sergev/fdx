@@ -345,7 +345,7 @@ func (c *Client) Read(filename string) error {
 	// Read tracks 0-159 (inclusive)
 	for track := uint(0); track <= 159; track++ {
 		// Print progress message
-		fmt.Printf("Reading track %d...\n", track)
+		fmt.Printf("\rReading track %d, side %d...", track / 2, track % 2)
 
 		// Seek to track
 		err = c.seekTrack(track)
@@ -365,6 +365,7 @@ func (c *Client) Read(filename string) error {
 			return fmt.Errorf("failed to write flux data for track %d: %w", track, err)
 		}
 	}
+	fmt.Printf(" Done\n")
 
 	return nil
 }

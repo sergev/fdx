@@ -457,7 +457,7 @@ func (c *Client) Read(filename string) error {
 	for cyl := 0; cyl < 80; cyl++ {
 		for head := 0; head < 2; head++ {
 			// Print progress message
-			fmt.Printf("Reading cylinder %d, head %d...\n", cyl, head)
+			fmt.Printf("\rReading track %d, side %d...", cyl, head)
 
 			// Seek to cylinder
 			err = c.Seek(byte(cyl))
@@ -490,6 +490,7 @@ func (c *Client) Read(filename string) error {
 			}
 		}
 	}
+	fmt.Printf(" Done\n")
 
 	return nil
 }
