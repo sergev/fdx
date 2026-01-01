@@ -18,8 +18,6 @@ const (
 	ProductID = 0x4d69 // Keir Fraser Greaseweazle
 )
 
-const baudRate = 115200
-
 // Command codes
 const (
 	CMD_GET_INFO        = 0
