@@ -1,0 +1,62 @@
+package supercardpro
+
+import (
+	"fmt"
+	"go.bug.st/serial"
+	"go.bug.st/serial/enumerator"
+	"floppy/adapter"
+)
+
+const (
+	VendorID  = 0x0403
+	ProductID = 0x6015
+)
+
+const baudRate = 115200
+
+// Client wraps a serial port connection to a SuperCard Pro device
+type Client struct {
+	port         serial.Port
+	serialNumber string
+}
+
+// NewClient creates a new SuperCard Pro client using the provided port details
+// It opens the serial port and initializes the connection
+func NewClient(portDetails *enumerator.PortDetails) (adapter.FloppyAdapter, error) {
+	// Open the serial port
+	mode := &serial.Mode{
+		BaudRate: baudRate,
+	}
+	port, err := serial.Open(portDetails.Name, mode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open serial port %s: %w", portDetails.Name, err)
+	}
+
+	client := &Client{
+		port:         port,
+		serialNumber: portDetails.SerialNumber,
+	}
+
+	// TODO: Add SuperCard Pro specific initialization when protocol is known
+	// For now, we just open the port and store the connection
+
+	return client, nil
+}
+
+// PrintStatus prints SuperCard Pro status information to stdout
+func (c *Client) PrintStatus() {
+	fmt.Printf("SuperCard Pro Adapter\n")
+	fmt.Printf("Serial Number: %s\n", c.serialNumber)
+	fmt.Printf("Baud Rate: %d\n", baudRate)
+	fmt.Printf("Status: Connected\n")
+	fmt.Printf("Note: Full protocol implementation pending\n")
+}
+
+// Close closes the serial port connection
+func (c *Client) Close() error {
+	if c.port != nil {
+		return c.port.Close()
+	}
+	return nil
+}
+
