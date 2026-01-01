@@ -3,6 +3,7 @@ package kryoflux
 import (
 	_ "embed"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -43,18 +44,23 @@ const (
 	FWReadChunkSize  = 6400
 
 	ControlTimeout = 5 * time.Second // Timeout for USB control transfers (matches legacy C code)
+
+	// Stream reading constants
+	AsyncReadBufferSize  = 6400
+	AsyncReadBufferCount = 100
+	StreamOnValue        = 0x601
 )
 
 // Client wraps a USB connection to a KryoFlux device
 type Client struct {
-	ctx             *gousb.Context
-	dev             *gousb.Device
-	intf            *gousb.Interface
-	done            func()
-	bulkOut         *gousb.OutEndpoint
-	bulkIn          *gousb.InEndpoint
-	deviceInfo1     string // From REQUEST_INFO index 1
-	deviceInfo2     string // From REQUEST_INFO index 2
+	ctx         *gousb.Context
+	dev         *gousb.Device
+	intf        *gousb.Interface
+	done        func()
+	bulkOut     *gousb.OutEndpoint
+	bulkIn      *gousb.InEndpoint
+	deviceInfo1 string // From REQUEST_INFO index 1
+	deviceInfo2 string // From REQUEST_INFO index 2
 }
 
 // NewClient creates a new KryoFlux client using USB communication
@@ -119,12 +125,12 @@ func NewClient(portDetails *enumerator.PortDetails) (adapter.FloppyAdapter, erro
 	}
 
 	client := &Client{
-		ctx:          ctx,
-		dev:          dev,
-		intf:         intf,
-		done:         done,
-		bulkOut:      bulkOut,
-		bulkIn:       bulkIn,
+		ctx:     ctx,
+		dev:     dev,
+		intf:    intf,
+		done:    done,
+		bulkOut: bulkOut,
+		bulkIn:  bulkIn,
 	}
 
 	// Check if firmware is present
@@ -134,7 +140,7 @@ func NewClient(portDetails *enumerator.PortDetails) (adapter.FloppyAdapter, erro
 	}
 
 	if !fwPresent {
-                fmt.Printf("Uploading KryoFlux firmware...\n")
+		fmt.Printf("Uploading KryoFlux firmware...\n")
 
 		// Upload firmware
 		err = client.uploadFirmware()
@@ -222,12 +228,12 @@ func NewClient(portDetails *enumerator.PortDetails) (adapter.FloppyAdapter, erro
 		}
 
 		client = &Client{
-			ctx:          ctx2,
-			dev:          dev2,
-			intf:         intf2,
-			done:         done2,
-			bulkOut:      bulkOut2,
-			bulkIn:       bulkIn2,
+			ctx:     ctx2,
+			dev:     dev2,
+			intf:    intf2,
+			done:    done2,
+			bulkOut: bulkOut2,
+			bulkIn:  bulkIn2,
 		}
 
 		// Verify firmware is now present
@@ -522,36 +528,410 @@ func (c *Client) getStatus() (string, error) {
 
 // PrintStatus prints KryoFlux status information to stdout
 func (c *Client) PrintStatus() {
-	fmt.Printf("KryoFlux Adapter\n")
+	fmt.Printf("KryoFlux Adapter Info:\n")
+	fmt.Printf("%s\n", c.deviceInfo1)
+	fmt.Printf("%s\n", c.deviceInfo2)
 
 	// Query status
-	status, err := c.getStatus()
+	//status, err := c.getStatus()
+	//if err != nil {
+	//	fmt.Printf("Status: Error querying status: %v\n", err)
+	//} else {
+	//	fmt.Printf("Status: %s\n", status)
+	//}
+
+}
+
+// configure configures the device with the specified parameters
+func (c *Client) configure(device, density, minTrack, maxTrack int) error {
+	_, err := c.controlIn(RequestDevice, uint16(device), false)
 	if err != nil {
-		fmt.Printf("Status: Error querying status: %v\n", err)
-	} else {
-		fmt.Printf("Status: %s\n", status)
+		return fmt.Errorf("failed to set device: %w", err)
 	}
 
-	// Query INFO 1
-	info1, err := c.getInfo(1)
+	_, err = c.controlIn(RequestDensity, uint16(density), false)
 	if err != nil {
-		fmt.Printf("Device Info 1: Error querying info: %v\n", err)
-	} else {
-		fmt.Printf("Device Info 1: %s\n", info1)
+		return fmt.Errorf("failed to set density: %w", err)
 	}
 
-	// Query INFO 2
-	info2, err := c.getInfo(2)
+	_, err = c.controlIn(RequestMinTrack, uint16(minTrack), false)
 	if err != nil {
-		fmt.Printf("Device Info 2: Error querying info: %v\n", err)
-	} else {
-		fmt.Printf("Device Info 2: %s\n", info2)
+		return fmt.Errorf("failed to set min track: %w", err)
 	}
+
+	_, err = c.controlIn(RequestMaxTrack, uint16(maxTrack), false)
+	if err != nil {
+		return fmt.Errorf("failed to set max track: %w", err)
+	}
+
+	return nil
+}
+
+// motorOn turns on the motor and positions the head at the specified side and track
+func (c *Client) motorOn(side, track int) error {
+	_, err := c.controlIn(RequestMotor, 1, false)
+	if err != nil {
+		return fmt.Errorf("failed to turn motor on: %w", err)
+	}
+
+	_, err = c.controlIn(RequestSide, uint16(side), false)
+	if err != nil {
+		return fmt.Errorf("failed to set side: %w", err)
+	}
+
+	_, err = c.controlIn(RequestTrack, uint16(track), false)
+	if err != nil {
+		return fmt.Errorf("failed to set track: %w", err)
+	}
+
+	return nil
+}
+
+// motorOff turns off the motor
+func (c *Client) motorOff() error {
+	_, err := c.controlIn(RequestMotor, 0, false)
+	if err != nil {
+		return fmt.Errorf("failed to turn motor off: %w", err)
+	}
+	return nil
+}
+
+// streamOn starts the stream
+func (c *Client) streamOn() error {
+	_, err := c.controlIn(RequestStream, StreamOnValue, false)
+	if err != nil {
+		return fmt.Errorf("failed to start stream: %w", err)
+	}
+	return nil
+}
+
+// streamOff stops the stream
+func (c *Client) streamOff() error {
+	_, err := c.controlIn(RequestStream, 0, false)
+	if err != nil {
+		return fmt.Errorf("failed to stop stream: %w", err)
+	}
+	return nil
+}
+
+// streamState tracks the state during stream validation
+type streamState struct {
+	complete    bool
+	failed      bool
+	resultFound bool
+	currentPos  uint32
+	skipCount   uint32
+}
+
+// validateStreamData validates KryoFlux stream data according to the format specification
+// Returns true if validation should continue, false if stream is complete or failed
+func (c *Client) validateStreamData(state *streamState, data []byte) bool {
+	if state.complete || state.failed {
+		return false
+	}
+
+	dataLen := uint32(len(data))
+	offset := uint32(0)
+
+	// Handle skip count from previous incomplete sequence
+	if state.skipCount > 0 {
+		n := state.skipCount
+		if n > dataLen {
+			n = dataLen
+		}
+		state.skipCount -= n
+		state.currentPos += n
+		offset += n
+		dataLen -= n
+	}
+
+	// Process the data
+	for dataLen > 0 {
+		if offset >= uint32(len(data)) {
+			break
+		}
+		val := data[offset]
+
+		if val <= 7 {
+			// Value: 2-byte sequence
+			if dataLen < 2 {
+				state.skipCount = 2 - dataLen
+				state.currentPos += dataLen
+				return true
+			}
+			state.currentPos += 2
+			offset += 2
+			dataLen -= 2
+		} else if val >= 0xe {
+			// Sample: 1-byte
+			state.currentPos++
+			offset++
+			dataLen--
+		} else {
+			switch val {
+			case 0x08, 0x09, 0x0a:
+				// Nop1-Nop3: variable length (1-3 bytes)
+				noffset := int(val - 7)
+				if dataLen < uint32(noffset) {
+					state.skipCount = uint32(noffset) - dataLen
+					state.currentPos += dataLen
+					return true
+				}
+				state.currentPos += uint32(noffset)
+				offset += uint32(noffset)
+				dataLen -= uint32(noffset)
+			case 0x0b:
+				// Overflow16: 1-byte
+				state.currentPos++
+				offset++
+				dataLen--
+			case 0x0c:
+				// Value16: 3-byte sequence
+				if dataLen < 3 {
+					state.skipCount = 3 - dataLen
+					state.currentPos += dataLen
+					return true
+				}
+				state.currentPos += 3
+				offset += 3
+				dataLen -= 3
+			case 0x0d:
+				// OOB marker: 4-byte header + data
+				if dataLen < 4 {
+					state.failed = true
+					return false
+				}
+				oobType := data[offset+1]
+				oobSize := uint32(data[offset+2]) | (uint32(data[offset+3]) << 8)
+
+				if oobType == 0x0d && oobSize == 0x0d0d {
+					// End of stream marker
+					if !state.resultFound {
+						state.failed = true
+						return false
+					}
+					state.complete = true
+					return false
+				}
+
+				if dataLen-4 < oobSize {
+					state.failed = true
+					return false
+				}
+
+				// Validate stream position for type 1 or 3
+				if oobType == 1 || oobType == 3 {
+					if oobSize < 4 {
+						state.failed = true
+						return false
+					}
+					streamPos := uint32(data[offset+4]) |
+						(uint32(data[offset+5]) << 8) |
+						(uint32(data[offset+6]) << 16) |
+						(uint32(data[offset+7]) << 24)
+					if streamPos != state.currentPos {
+						state.failed = true
+						return false
+					}
+				}
+
+				// Check result for type 3
+				if oobType == 3 {
+					if oobSize < 8 {
+						state.failed = true
+						return false
+					}
+					state.resultFound = true
+					result := uint32(data[offset+8]) |
+						(uint32(data[offset+9]) << 8) |
+						(uint32(data[offset+10]) << 16) |
+						(uint32(data[offset+11]) << 24)
+					if result != 0 {
+						state.failed = true
+						return false
+					}
+				}
+
+				state.currentPos += oobSize + 4
+				offset += oobSize + 4
+				dataLen -= oobSize + 4
+			default:
+				// Unknown/invalid marker
+				state.failed = true
+				return false
+			}
+		}
+	}
+
+	return !state.complete && !state.failed
+}
+
+// writePreamble writes the stream preamble with timestamp to the file
+func (c *Client) writePreamble(file *os.File) error {
+	now := time.Now()
+	timestamp := fmt.Sprintf("host_date=%04d.%02d.%02d, host_time=%02d:%02d:%02d",
+		now.Year(), int(now.Month()), now.Day(),
+		now.Hour(), now.Minute(), now.Second())
+
+	buf := make([]byte, 4+len(timestamp)+1)
+	buf[0] = 0x0d
+	buf[1] = 4
+	buf[2] = byte(len(timestamp) + 1)
+	buf[3] = 0
+	copy(buf[4:], timestamp)
+	buf[4+len(timestamp)] = 0
+
+	_, err := file.Write(buf)
+	if err != nil {
+		return fmt.Errorf("failed to write preamble: %w", err)
+	}
+	return nil
+}
+
+// captureStream captures a stream from the device and writes it to the file
+func (c *Client) captureStream(file *os.File) error {
+	state := &streamState{
+		complete:    false,
+		failed:      false,
+		resultFound: false,
+		currentPos:  0,
+		skipCount:   0,
+	}
+
+	// Channel for reading data
+	dataChan := make(chan []byte, AsyncReadBufferCount)
+	errChan := make(chan error, 1)
+	doneChan := make(chan bool, 1)
+
+	// Start async read in goroutine
+	go func() {
+		buf := make([]byte, AsyncReadBufferSize)
+		for {
+			length, err := c.bulkIn.Read(buf)
+			if err != nil {
+				errChan <- err
+				return
+			}
+			if length == 0 {
+				continue
+			}
+			data := make([]byte, length)
+			copy(data, buf[:length])
+			select {
+			case dataChan <- data:
+			case <-doneChan:
+				return
+			}
+		}
+	}()
+
+	// Start stream
+	err := c.streamOn()
+	if err != nil {
+		doneChan <- true
+		return fmt.Errorf("failed to start stream: %w", err)
+	}
+
+	// Process incoming data
+	processing := true
+	for processing {
+		select {
+		case data := <-dataChan:
+			// Validate the data first
+			shouldContinue := c.validateStreamData(state, data)
+			// Write the data if validation passed (even if stream is now complete)
+			if !state.failed {
+				_, err := file.Write(data)
+				if err != nil {
+					doneChan <- true
+					c.streamOff()
+					return fmt.Errorf("failed to write stream data: %w", err)
+				}
+			}
+			if !shouldContinue {
+				processing = false
+			}
+		case err := <-errChan:
+			doneChan <- true
+			c.streamOff()
+			return fmt.Errorf("failed to read stream data: %w", err)
+		case <-time.After(30 * time.Second):
+			// Timeout after 30 seconds
+			doneChan <- true
+			c.streamOff()
+			return fmt.Errorf("stream read timeout")
+		}
+	}
+
+	// Stop stream
+	err = c.streamOff()
+	if err != nil {
+		doneChan <- true
+		return fmt.Errorf("failed to stop stream: %w", err)
+	}
+
+	doneChan <- true
+
+	if state.failed {
+		return fmt.Errorf("stream validation failed")
+	}
+	if !state.complete {
+		return fmt.Errorf("stream did not complete properly")
+	}
+
+	return nil
 }
 
 // Read reads the entire floppy disk and writes it to the specified filename
 func (c *Client) Read(filename string) error {
-	return fmt.Errorf("Read() not yet implemented for KryoFlux adapter")
+	// Configure device with default values (device=0, density=0, minTrack=0, maxTrack=83)
+	err := c.configure(0, 0, 0, 83)
+	if err != nil {
+		return fmt.Errorf("failed to configure device: %w", err)
+	}
+
+	// Open output file
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer file.Close()
+
+	// Loop through tracks (0-83) and sides (0-1)
+	for track := 0; track <= 83; track++ {
+		for side := 0; side < 2; side++ {
+			// Print progress message
+			fmt.Printf("%02d.%d    : ", track, side)
+
+			// Turn on motor and position head
+			err = c.motorOn(side, track)
+			if err != nil {
+				return fmt.Errorf("failed to position head at track %d, side %d: %w", track, side, err)
+			}
+
+			// Write preamble for this track/side
+			err = c.writePreamble(file)
+			if err != nil {
+				return fmt.Errorf("failed to write preamble for track %d, side %d: %w", track, side, err)
+			}
+
+			// Capture stream data
+			err = c.captureStream(file)
+			if err != nil {
+				return fmt.Errorf("failed to capture stream from track %d, side %d: %w", track, side, err)
+			}
+
+			fmt.Printf("ok\n")
+		}
+	}
+
+	// Turn off motor
+	err = c.motorOff()
+	if err != nil {
+		return fmt.Errorf("failed to turn off motor: %w", err)
+	}
+
+	return nil
 }
 
 // Write writes data from the specified filename to the floppy disk
