@@ -52,6 +52,11 @@ func (c *Client) PrintStatus() {
 	fmt.Printf("Note: Full protocol implementation pending\n")
 }
 
+// Read reads the entire floppy disk and writes it to the specified filename
+func (c *Client) Read(filename string) error {
+	return fmt.Errorf("Read() not yet implemented for KryoFlux adapter")
+}
+
 // Close closes the serial port connection
 func (c *Client) Close() error {
 	if c.port != nil {

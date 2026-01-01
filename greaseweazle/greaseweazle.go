@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"floppy/adapter"
@@ -433,4 +434,64 @@ func (c *Client) ReadFlux(ticks uint32, maxIndex uint16) ([]byte, error) {
 func (c *Client) GetFluxStatus() error {
 	cmd := []byte{CMD_GET_FLUX_STATUS, 2}
 	return c.doCommand(cmd)
+}
+
+// Read reads the entire floppy disk and writes it to the specified filename
+func (c *Client) Read(filename string) error {
+	// Select drive 0 and turn on motor
+	err := c.SelectDrive(0)
+	if err != nil {
+		return fmt.Errorf("failed to select drive: %w", err)
+	}
+	err = c.SetMotor(0, true)
+	if err != nil {
+		return fmt.Errorf("failed to turn on motor: %w", err)
+	}
+
+	// Open output file
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer file.Close()
+
+	// Iterate through 80 cylinders (0-79) and 2 heads (0-1)
+	for cyl := 0; cyl < 80; cyl++ {
+		for head := 0; head < 2; head++ {
+			// Print progress message
+			fmt.Printf("Reading cylinder %d, head %d...\n", cyl, head)
+
+			// Seek to cylinder
+			err = c.Seek(byte(cyl))
+			if err != nil {
+				return fmt.Errorf("failed to seek to cylinder %d: %w", cyl, err)
+			}
+
+			// Set head
+			err = c.SetHead(byte(head))
+			if err != nil {
+				return fmt.Errorf("failed to set head %d: %w", head, err)
+			}
+
+			// Read flux data (0 ticks = no limit, 2 index pulses = 2 revolutions)
+			data, err := c.ReadFlux(0, 2)
+			if err != nil {
+				return fmt.Errorf("failed to read flux data from cylinder %d, head %d: %w", cyl, head, err)
+			}
+
+			// Check flux status
+			err = c.GetFluxStatus()
+			if err != nil {
+				return fmt.Errorf("flux status error after reading cylinder %d, head %d: %w", cyl, head, err)
+			}
+
+			// Write raw flux data to file
+			_, err = file.Write(data)
+			if err != nil {
+				return fmt.Errorf("failed to write data to file: %w", err)
+			}
+		}
+	}
+
+	return nil
 }
