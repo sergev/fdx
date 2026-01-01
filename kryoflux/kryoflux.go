@@ -41,6 +41,8 @@ const (
 	FWLoadAddress    = 0x00202000
 	FWWriteChunkSize = 16384
 	FWReadChunkSize  = 6400
+
+	ControlTimeout = 5 * time.Second // Timeout for USB control transfers (matches legacy C code)
 )
 
 // Client wraps a USB connection to a KryoFlux device
@@ -53,7 +55,6 @@ type Client struct {
 	bulkIn          *gousb.InEndpoint
 	deviceInfo1     string // From REQUEST_INFO index 1
 	deviceInfo2     string // From REQUEST_INFO index 2
-	firmwarePresent bool
 }
 
 // NewClient creates a new KryoFlux client using USB communication
@@ -127,15 +128,14 @@ func NewClient(portDetails *enumerator.PortDetails) (adapter.FloppyAdapter, erro
 	}
 
 	// Check if firmware is present
-	// Skip firmware check for now to avoid hanging - assume firmware is present
-	// TODO: Implement firmware check with proper timeout mechanism
-	fwPresent := true
-	// fwPresent, err := client.checkFirmwarePresent()
-	// if err != nil {
-	// 	fwPresent = false
-	// }
+	fwPresent, err := client.checkFirmwarePresent()
+	if err != nil {
+		fwPresent = false
+	}
 
 	if !fwPresent {
+                fmt.Printf("Uploading KryoFlux firmware...\n")
+
 		// Upload firmware
 		err = client.uploadFirmware()
 		if err != nil {
@@ -143,11 +143,13 @@ func NewClient(portDetails *enumerator.PortDetails) (adapter.FloppyAdapter, erro
 			return nil, fmt.Errorf("failed to upload firmware: %w", err)
 		}
 
-		// Close current connection (device will re-enumerate)
-		client.Close()
+		// Close interface and device explicitly
+		done()
+		dev.Close()
+		ctx.Close()
 
 		// Wait for device re-enumeration
-		time.Sleep(2 * time.Second)
+		time.Sleep(1 * time.Second)
 
 		// Reopen device
 		ctx2 := gousb.NewContext()
@@ -177,12 +179,25 @@ func NewClient(portDetails *enumerator.PortDetails) (adapter.FloppyAdapter, erro
 			return nil, fmt.Errorf("failed to get config 1 after firmware upload: %w", err)
 		}
 
-		intf2, err := cfg2.Interface(Interface, 0)
+		// Claim interface 1
+		// Retry in case device isn't fully ready after re-enumeration
+		var intf2 *gousb.Interface
+		const maxInterfaceRetries = 25
+		const interfaceRetryDelay = 200 * time.Millisecond
+		for retry := 0; retry < maxInterfaceRetries; retry++ {
+			intf2, err = cfg2.Interface(Interface, 0)
+			if err == nil {
+				break
+			}
+			if retry < maxInterfaceRetries-1 {
+				time.Sleep(interfaceRetryDelay)
+			}
+		}
 		if err != nil {
 			cfg2.Close()
 			dev2.Close()
 			ctx2.Close()
-			return nil, fmt.Errorf("failed to claim interface %d after firmware upload: %w", Interface, err)
+			return nil, fmt.Errorf("failed to claim interface %d after firmware upload (tried %d times): %w", Interface, maxInterfaceRetries, err)
 		}
 
 		done2 := func() {
@@ -227,14 +242,12 @@ func NewClient(portDetails *enumerator.PortDetails) (adapter.FloppyAdapter, erro
 		}
 	}
 
-	client.firmwarePresent = true
-
 	// Reset device and get info
 	err = client.reset()
 	if err != nil {
 		// Don't fail completely if reset fails - device might still work
 		// client.Close()
-		// return nil, fmt.Errorf("failed to reset device: %w", err)
+		return nil, fmt.Errorf("failed to reset device: %w", err)
 	}
 
 	return client, nil
@@ -291,6 +304,32 @@ func (c *Client) controlIn(request byte, index uint16, silent bool) ([]byte, err
 	return buf[:length], nil
 }
 
+// controlInWithTimeout performs a control transfer IN request with a timeout
+// This wraps the USB control transfer to prevent hanging if the device doesn't respond
+func (c *Client) controlInWithTimeout(request byte, index uint16, silent bool) ([]byte, error) {
+	type result struct {
+		data []byte
+		err  error
+	}
+
+	// Channel to receive the result from the goroutine
+	resultChan := make(chan result, 1)
+
+	// Execute control transfer in a goroutine
+	go func() {
+		data, err := c.controlIn(request, index, silent)
+		resultChan <- result{data: data, err: err}
+	}()
+
+	// Wait for either completion or timeout
+	select {
+	case res := <-resultChan:
+		return res.data, res.err
+	case <-time.After(ControlTimeout):
+		return nil, fmt.Errorf("control transfer timeout after %v", ControlTimeout)
+	}
+}
+
 // checkFirmwarePresent checks if firmware is present by querying REQUEST_STATUS
 func (c *Client) checkFirmwarePresent() (bool, error) {
 	// Try twice to get stable result (as per C code)
@@ -317,7 +356,7 @@ func (c *Client) checkFirmwarePresent() (bool, error) {
 
 // tryCheckStatus attempts to check status (silent version)
 func (c *Client) tryCheckStatus() (bool, error) {
-	_, err := c.controlIn(RequestStatus, 0, true)
+	_, err := c.controlInWithTimeout(RequestStatus, 0, true)
 	return err == nil, err
 }
 
@@ -484,7 +523,6 @@ func (c *Client) getStatus() (string, error) {
 // PrintStatus prints KryoFlux status information to stdout
 func (c *Client) PrintStatus() {
 	fmt.Printf("KryoFlux Adapter\n")
-	fmt.Printf("Firmware Present: %v\n", c.firmwarePresent)
 
 	// Query status
 	status, err := c.getStatus()
