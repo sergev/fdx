@@ -80,25 +80,14 @@ func findAdapter() (adapter.FloppyAdapter, error) {
 		}
 	}
 
-	// Try KryoFlux
-	for _, port := range ports {
-		portVID, err := strconv.ParseUint(port.VID, 16, 16)
-		if err != nil {
-			continue
-		}
-		portPID, err := strconv.ParseUint(port.PID, 16, 16)
-		if err != nil {
-			continue
-		}
-
-		if uint16(portVID) == kryoflux.VendorID && uint16(portPID) == kryoflux.ProductID {
-			adapter, err := kryoflux.NewClient(port)
-			if err != nil {
-				continue // Try next port
-			}
-			return adapter, nil
-		}
+	// Try KryoFlux (uses USB directly, not serial port)
+	// KryoFlux.NewClient handles USB enumeration internally and ignores portDetails parameter
+	kryofluxAdapter, err := kryoflux.NewClient(nil)
+	if err == nil && kryofluxAdapter != nil {
+		return kryofluxAdapter, nil
 	}
+	// Debug: log the error to see what's happening
+	// fmt.Printf("KryoFlux detection error: %v\n", err)
 
 	return nil, fmt.Errorf("no supported USB adapter found (Greaseweazle: VID=0x%04X PID=0x%04X, SuperCard Pro: VID=0x%04X PID=0x%04X, KryoFlux: VID=0x%04X PID=0x%04X)",
 		greaseweazle.VendorID, greaseweazle.ProductID, supercardpro.VendorID, supercardpro.ProductID, kryoflux.VendorID, kryoflux.ProductID)
