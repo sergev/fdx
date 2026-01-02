@@ -2,6 +2,7 @@ package greaseweazle
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,6 +40,7 @@ const (
 	CMD_ERASE_FLUX      = 17
 	CMD_SOURCE_BYTES    = 18
 	CMD_SINK_BYTES      = 19
+	CMD_GET_PIN         = 20
 )
 
 // GET_INFO indices
@@ -72,6 +74,9 @@ const (
 	ACK_BAD_PIN        = 10
 	ACK_BAD_CYLINDER   = 11
 )
+
+// Sentinel error for unsupported pins
+var ErrBadPin = errors.New("pin not supported")
 
 // Bus type codes
 const (
@@ -302,6 +307,95 @@ func (c *Client) fetchBwStats() (BwStats, error) {
 	return stats, nil
 }
 
+// getPinValue reads the pin level for the specified pin number
+// Returns true for High (1), false for Low (0), or ErrBadPin if the pin is not supported
+func (c *Client) getPinValue(pin byte) (bool, error) {
+	// Send CMD_GET_PIN command: [CMD_GET_PIN, length=3, pin#]
+	cmd := []byte{CMD_GET_PIN, 3, pin}
+	_, err := c.port.Write(cmd)
+	if err != nil {
+		return false, fmt.Errorf("failed to write command: %w", err)
+	}
+
+	// Read ACK response (2 bytes: command echo, status)
+	ack := make([]byte, 2)
+	_, err = io.ReadFull(c.port, ack)
+	if err != nil {
+		return false, fmt.Errorf("failed to read ACK: %w", err)
+	}
+
+	// Validate command echo matches
+	if ack[0] != cmd[0] {
+		return false, fmt.Errorf("command returned garbage (0x%02x != 0x%02x with status 0x%02x)",
+			ack[0], cmd[0], ack[1])
+	}
+
+	// Check status
+	if ack[1] == ACK_BAD_PIN {
+		return false, ErrBadPin
+	}
+
+	if ack[1] != ACK_OKAY {
+		return false, ackError(ack[1])
+	}
+
+	// Read pin level byte (1=High, 0=Low)
+	pinLevel := make([]byte, 1)
+	_, err = io.ReadFull(c.port, pinLevel)
+	if err != nil {
+		return false, fmt.Errorf("failed to read pin level: %w", err)
+	}
+
+	return pinLevel[0] == 1, nil
+}
+
+// Display bandwidth statistics
+func (c *Client) PrintBwStats() {
+	bwStats, err := c.fetchBwStats()
+	if err != nil {
+		fmt.Printf("Warning: Failed to fetch bandwidth statistics: %v\n", err)
+	} else {
+		// Calculate throughput for min bandwidth (MB/s)
+		var minBwMBs float64
+		if bwStats.MinBw.Usecs > 0 {
+			minBwMBs = float64(bwStats.MinBw.Bytes) / float64(bwStats.MinBw.Usecs) * 1000000.0 / 1024.0 / 1024.0
+		}
+
+		// Calculate throughput for max bandwidth (MB/s)
+		var maxBwMBs float64
+		if bwStats.MaxBw.Usecs > 0 {
+			maxBwMBs = float64(bwStats.MaxBw.Bytes) / float64(bwStats.MaxBw.Usecs) * 1000000.0 / 1024.0 / 1024.0
+		}
+
+		fmt.Printf("\nBandwidth Statistics:\n")
+		fmt.Printf("  Min: %d bytes in %d μs (%.2f MB/s)\n", bwStats.MinBw.Bytes, bwStats.MinBw.Usecs, minBwMBs)
+		fmt.Printf("  Max: %d bytes in %d μs (%.2f MB/s)\n", bwStats.MaxBw.Bytes, bwStats.MaxBw.Usecs, maxBwMBs)
+	}
+}
+
+// Display pin status
+func (c *Client) PrintPins() {
+	fmt.Printf("\nPin Status:\n")
+	for pin := byte(1); pin <= 34; pin++ {
+		pinLevel, err := c.getPinValue(pin)
+		if err == ErrBadPin {
+			// Skip unsupported pins
+			continue
+		}
+		if err != nil {
+			// Log warning for other errors but continue
+			fmt.Printf("  Pin %d: Error reading pin: %v\n", pin, err)
+			continue
+		}
+
+		levelStr := "Low"
+		if pinLevel {
+			levelStr = "High"
+		}
+		fmt.Printf("  Pin %d: %s\n", pin, levelStr)
+	}
+}
+
 // PrintStatus prints all firmware information to stdout
 func (c *Client) PrintStatus() {
 	fw := c.firmwareInfo
@@ -345,26 +439,10 @@ func (c *Client) PrintStatus() {
 	fmt.Printf("USB Buffer: %d KB\n", fw.USBBufKB)
 
 	// Display bandwidth statistics
-	bwStats, err := c.fetchBwStats()
-	if err != nil {
-		fmt.Printf("Warning: Failed to fetch bandwidth statistics: %v\n", err)
-	} else {
-		// Calculate throughput for min bandwidth (MB/s)
-		var minBwMBs float64
-		if bwStats.MinBw.Usecs > 0 {
-			minBwMBs = float64(bwStats.MinBw.Bytes) / float64(bwStats.MinBw.Usecs) * 1000000.0 / 1024.0 / 1024.0
-		}
+	//c.PrintBwStats()
 
-		// Calculate throughput for max bandwidth (MB/s)
-		var maxBwMBs float64
-		if bwStats.MaxBw.Usecs > 0 {
-			maxBwMBs = float64(bwStats.MaxBw.Bytes) / float64(bwStats.MaxBw.Usecs) * 1000000.0 / 1024.0 / 1024.0
-		}
-
-		fmt.Printf("\nBandwidth Statistics:\n")
-		fmt.Printf("  Min: %d bytes in %d μs (%.2f MB/s)\n", bwStats.MinBw.Bytes, bwStats.MinBw.Usecs, minBwMBs)
-		fmt.Printf("  Max: %d bytes in %d μs (%.2f MB/s)\n", bwStats.MaxBw.Bytes, bwStats.MaxBw.Usecs, maxBwMBs)
-	}
+	// Display pin status
+	//c.PrintPins()
 }
 
 // Seek moves the read/write head to the specified cylinder
