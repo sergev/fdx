@@ -78,6 +78,19 @@ const (
 // Sentinel error for unsupported pins
 var ErrBadPin = errors.New("pin not supported")
 
+// Flux stream opcodes
+const (
+	FLUXOP_INDEX = 1
+	FLUXOP_SPACE = 2
+)
+
+// PLL and MFM constants
+const (
+	MFM_NOMINAL_PERIOD_NS = 2000 // 250 kbps MFM: 1 bitcell = 2000ns
+	PLL_DAMPING           = 0.2  // Damping factor for PLL
+	PLL_WINDOW_TOLERANCE  = 0.25 // ±25% window tolerance
+)
+
 // Bus type codes
 const (
 	BUS_NONE    = 0
@@ -512,6 +525,319 @@ func (c *Client) GetFluxStatus() error {
 	return c.doCommand(cmd)
 }
 
+// readN28 decodes a 28-bit value from Greaseweazle N28 encoding
+// Returns the decoded value and the number of bytes consumed
+func readN28(data []byte, offset int) (uint32, int, error) {
+	if offset+4 > len(data) {
+		return 0, 0, fmt.Errorf("insufficient data for N28 encoding at offset %d", offset)
+	}
+
+	b0 := data[offset]
+	b1 := data[offset+1]
+	b2 := data[offset+2]
+	b3 := data[offset+3]
+
+	value := ((uint32(b0) & 0xfe) >> 1) |
+		((uint32(b1) & 0xfe) << 6) |
+		((uint32(b2) & 0xfe) << 13) |
+		((uint32(b3) & 0xfe) << 20)
+
+	return value, 4, nil
+}
+
+// PLLState represents the state of the Phase-Locked Loop
+type PLLState struct {
+	period float64 // Expected bitcell period in nanoseconds
+	phase  float64 // Current phase accumulator (0.0 to 1.0)
+}
+
+// decodeFlux decodes raw Greaseweazle flux data, applies PLL clock recovery,
+// and decodes MFM bitcells to bytes
+func (c *Client) decodeFlux(fluxData []byte) ([]byte, error) {
+	if len(fluxData) == 0 {
+		return nil, fmt.Errorf("empty flux data")
+	}
+
+	// Step 1: Decode Greaseweazle flux stream to get transition times
+	var transitions []uint64 // Times in nanoseconds
+	var indexPulses []uint64 // Index pulse times
+
+	clockPeriodNs := 1e9 / float64(c.firmwareInfo.SampleFreqHz) // Nanoseconds per tick
+	ticksAccumulated := uint64(0)
+
+	i := 0
+	for i < len(fluxData) {
+		b := fluxData[i]
+
+		if b == 0xFF {
+			// Special opcode
+			if i+1 >= len(fluxData) {
+				return nil, fmt.Errorf("incomplete opcode at offset %d", i)
+			}
+
+			opcode := fluxData[i+1]
+			i += 2
+
+			switch opcode {
+			case FLUXOP_INDEX:
+				// Index pulse marker
+				n28, consumed, err := readN28(fluxData, i)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read INDEX N28: %w", err)
+				}
+				i += consumed
+				indexTime := ticksAccumulated + uint64(n28)
+				indexPulses = append(indexPulses, uint64(float64(indexTime)*clockPeriodNs))
+				// Index pulse doesn't advance the cursor
+
+			case FLUXOP_SPACE:
+				// Time gap with no transitions
+				n28, consumed, err := readN28(fluxData, i)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read SPACE N28: %w", err)
+				}
+				i += consumed
+				ticksAccumulated += uint64(n28)
+
+			default:
+				return nil, fmt.Errorf("unknown opcode 0x%02x at offset %d", opcode, i-1)
+			}
+		} else if b < 250 {
+			// Direct interval: 1-249 ticks
+			ticksAccumulated += uint64(b)
+			transitionTime := uint64(float64(ticksAccumulated) * clockPeriodNs)
+			transitions = append(transitions, transitionTime)
+			i++
+		} else {
+			// Extended interval: 250-254
+			if i+1 >= len(fluxData) {
+				return nil, fmt.Errorf("incomplete extended interval at offset %d", i)
+			}
+			delta := 250 + uint64(b-250)*255 + uint64(fluxData[i+1]) - 1
+			ticksAccumulated += delta
+			transitionTime := uint64(float64(ticksAccumulated) * clockPeriodNs)
+			transitions = append(transitions, transitionTime)
+			i += 2
+		}
+	}
+
+	if len(transitions) == 0 {
+		return nil, fmt.Errorf("no flux transitions found")
+	}
+
+	// Step 2: Apply PLL to recover clock and generate bitcell boundaries
+	pll := PLLState{
+		period: MFM_NOMINAL_PERIOD_NS,
+		phase:  0.0,
+	}
+
+	var bitcells []bool // MFM bitcells (true = 1, false = 0)
+
+	if len(transitions) < 2 {
+		return nil, fmt.Errorf("insufficient transitions for PLL lock")
+	}
+
+	// Initialize PLL with first few transitions
+	lastTransitionTime := transitions[0]
+
+	for i := 1; i < len(transitions) && i < 100; i++ {
+		deltaTime := float64(transitions[i] - lastTransitionTime)
+
+		// Calculate expected phase at this time
+		expectedPhase := pll.phase + (deltaTime / pll.period)
+
+		// Calculate phase error (how many periods this interval represents)
+		periods := deltaTime / pll.period
+		phaseError := periods - float64(int(periods+0.5))
+
+		// Adjust period
+		pll.period += PLL_DAMPING * phaseError * pll.period
+
+		// Clamp period to reasonable range (±50% of nominal)
+		if pll.period < MFM_NOMINAL_PERIOD_NS*0.5 {
+			pll.period = MFM_NOMINAL_PERIOD_NS * 0.5
+		}
+		if pll.period > MFM_NOMINAL_PERIOD_NS*1.5 {
+			pll.period = MFM_NOMINAL_PERIOD_NS * 1.5
+		}
+
+		pll.phase = expectedPhase - float64(int(expectedPhase))
+		lastTransitionTime = transitions[i]
+	}
+
+	// Step 3: Generate bitcell boundaries and decode MFM
+	currentTime := transitions[0]
+	transitionIdx := 0
+
+	// Generate bitcells until we run out of transitions
+	for transitionIdx < len(transitions) {
+		// Calculate bitcell boundaries
+		bitcellStart := currentTime
+		bitcellMiddle := currentTime + uint64(pll.period/2)
+		bitcellEnd := currentTime + uint64(pll.period)
+
+		// Look for transitions in this bitcell window
+		windowMin := bitcellStart
+		windowMax := bitcellEnd + uint64(pll.period*PLL_WINDOW_TOLERANCE)
+
+		var transitionsInBitcell []uint64
+		checkIdx := transitionIdx
+
+		// Collect all transitions in the bitcell window
+		for checkIdx < len(transitions) {
+			if transitions[checkIdx] < windowMin {
+				// Transition too early, skip it (noise?)
+				checkIdx++
+				continue
+			}
+			if transitions[checkIdx] > windowMax {
+				// Transition too late, stop looking
+				break
+			}
+			transitionsInBitcell = append(transitionsInBitcell, transitions[checkIdx])
+			checkIdx++
+		}
+
+		// Determine MFM bitcell value based on transitions
+		hasMiddleTransition := false
+		hasEndTransition := false
+
+		for _, transTime := range transitionsInBitcell {
+			middleWindowMin := bitcellMiddle - uint64(pll.period*PLL_WINDOW_TOLERANCE)
+			middleWindowMax := bitcellMiddle + uint64(pll.period*PLL_WINDOW_TOLERANCE)
+			endWindowMin := bitcellEnd - uint64(pll.period*PLL_WINDOW_TOLERANCE)
+			endWindowMax := bitcellEnd + uint64(pll.period*PLL_WINDOW_TOLERANCE)
+
+			if transTime >= middleWindowMin && transTime <= middleWindowMax {
+				hasMiddleTransition = true
+			}
+			if transTime >= endWindowMin && transTime <= endWindowMax {
+				hasEndTransition = true
+			}
+		}
+
+		// Decode MFM pattern to data bit
+		// 00 = no transition -> 0
+		// 01 = transition at end -> 1
+		// 10 = transition at middle -> 0
+		// 11 = transition at middle and end -> 1
+		var dataBit bool
+		if hasMiddleTransition && hasEndTransition {
+			// '11' -> 1
+			dataBit = true
+		} else if hasEndTransition {
+			// '01' -> 1
+			dataBit = true
+		} else if hasMiddleTransition {
+			// '10' -> 0
+			dataBit = false
+		} else {
+			// '00' -> 0
+			dataBit = false
+		}
+
+		bitcells = append(bitcells, dataBit)
+
+		// Advance transition index past transitions we've processed
+		transitionIdx = checkIdx
+
+		// Update PLL based on actual transition timing
+		if len(transitionsInBitcell) > 0 {
+			// Use the first transition for PLL update
+			actualPeriod := float64(transitionsInBitcell[0] - bitcellStart)
+			if actualPeriod > 0 {
+				phaseError := (actualPeriod - pll.period) / pll.period
+				pll.period += PLL_DAMPING * phaseError * pll.period
+
+				// Clamp period
+				if pll.period < MFM_NOMINAL_PERIOD_NS*0.5 {
+					pll.period = MFM_NOMINAL_PERIOD_NS * 0.5
+				}
+				if pll.period > MFM_NOMINAL_PERIOD_NS*1.5 {
+					pll.period = MFM_NOMINAL_PERIOD_NS * 1.5
+				}
+			}
+		}
+
+		currentTime = bitcellEnd
+
+		// Limit output size to prevent excessive memory usage
+		if len(bitcells) > 100000 {
+			break
+		}
+	}
+
+	if len(bitcells) == 0 {
+		return nil, fmt.Errorf("no bitcells generated")
+	}
+
+	// Step 4: Decode MFM bitcells to bytes
+	// MFM encoding: clock bit (odd positions) + data bit (even positions)
+	// We need to extract data bits (every other bit starting from position 1)
+	var decodedBytes []byte
+
+	// Search for sync pattern (0x4489 in MFM: 0100010010001001)
+	// This helps align the bit stream
+	syncPattern := []bool{false, true, false, false, false, true, false, false, true, false, false, false, true, false, false, true}
+
+	startIdx := 0
+	if len(bitcells) >= len(syncPattern) {
+		// Try to find sync pattern
+		for i := 0; i <= len(bitcells)-len(syncPattern); i++ {
+			match := true
+			for j := 0; j < len(syncPattern); j++ {
+				if bitcells[i+j] != syncPattern[j] {
+					match = false
+					break
+				}
+			}
+			if match {
+				startIdx = i
+				break
+			}
+		}
+	}
+
+	// Extract data bits - bitcells already contains the decoded data bits
+	// Pack them sequentially into bytes
+	currentByte := byte(0)
+	bitCount := 0
+
+	for i := startIdx; i < len(bitcells); i++ {
+		// Add data bit to current byte
+		if bitcells[i] {
+			currentByte |= 1 << (7 - bitCount)
+		}
+		bitCount++
+
+		// When we have 8 bits, save the byte and start a new one
+		if bitCount == 8 {
+			decodedBytes = append(decodedBytes, currentByte)
+			currentByte = 0
+			bitCount = 0
+		}
+	}
+
+	// Add any remaining partial byte
+	if bitCount > 0 {
+		decodedBytes = append(decodedBytes, currentByte)
+	}
+
+	if len(decodedBytes) == 0 {
+		return nil, fmt.Errorf("no bytes decoded from bitcells")
+	}
+
+	return decodedBytes, nil
+}
+
+// absInt64 returns the absolute value of an int64
+func absInt64(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
 // Read reads the entire floppy disk and writes it to the specified filename
 func (c *Client) Read(filename string) error {
 	// Select drive 0 and turn on motor
@@ -555,14 +881,20 @@ func (c *Client) Read(filename string) error {
 				return fmt.Errorf("failed to read flux data from cylinder %d, head %d: %w", cyl, head, err)
 			}
 
+			// Decode flux data using PLL and MFM decoding
+			decodedData, err := c.decodeFlux(data)
+			if err != nil {
+				return fmt.Errorf("failed to decode flux data from cylinder %d, head %d: %w", cyl, head, err)
+			}
+
 			// Check flux status
 			err = c.GetFluxStatus()
 			if err != nil {
 				return fmt.Errorf("flux status error after reading cylinder %d, head %d: %w", cyl, head, err)
 			}
 
-			// Write raw flux data to file
-			_, err = file.Write(data)
+			// Write decoded data to file
+			_, err = file.Write(decodedData)
 			if err != nil {
 				return fmt.Errorf("failed to write data to file: %w", err)
 			}
