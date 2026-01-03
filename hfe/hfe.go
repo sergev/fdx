@@ -503,7 +503,7 @@ func encodeOpcodes(data []byte, bitrateKbps uint16) []byte {
 	// Formula: code = round(FLOPPYEMUFREQ / bitrate_bps)
 	// Simplified: code = round(36000000 / (bitrate_kbps * 1000))
 	bitrateBps := float64(bitrateKbps) * 1000.0
-	timeBase := float64(FLOPPYEMUFREQ) / bitrateBps
+	timeBase := float64(FLOPPYEMUFREQ) / bitrateBps / 2
 	bitrateCode := byte(timeBase)
 	if bitrateCode == 0 && bitrateKbps > 0 {
 		// Ensure non-zero code (minimum 1)

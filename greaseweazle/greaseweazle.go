@@ -892,6 +892,13 @@ func (c *Client) Read(filename string) error {
 
 				disk.Header.FloppyRPM = calculatedRPM
 				disk.Header.BitRate = calculatedBitRate
+				if (disk.Header.BitRate >= 750) {
+                                    // Extended density
+                                    disk.Header.FloppyInterfaceMode = hfe.IFM_IBMPC_ED
+                                } else if (disk.Header.BitRate >= 375) {
+                                    // High density
+                                    disk.Header.FloppyInterfaceMode = hfe.IFM_IBMPC_HD
+                                }
 			}
 
 			// Decode flux data to MFM bitstream
