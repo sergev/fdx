@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"floppy/adapter"
+	"floppy/hfe"
 
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
@@ -551,9 +551,243 @@ type PLLState struct {
 	phase  float64 // Current phase accumulator (0.0 to 1.0)
 }
 
-// decodeFlux decodes raw Greaseweazle flux data, applies PLL clock recovery,
-// and decodes MFM bitcells to bytes
-func (c *Client) decodeFlux(fluxData []byte) ([]byte, error) {
+// absInt64 returns the absolute value of an int64
+func absInt64(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// calculateRPMFromFlux extracts index pulse timings from flux data and calculates RPM
+// Returns the calculated RPM, or 300 (default) if calculation fails
+func (c *Client) calculateRPMFromFlux(fluxData []byte) uint16 {
+	if len(fluxData) == 0 {
+		return 300 // Default RPM
+	}
+
+	var indexPulses []uint64 // Index pulse times in nanoseconds
+
+	clockPeriodNs := 1e9 / float64(c.firmwareInfo.SampleFreqHz) // Nanoseconds per tick
+	ticksAccumulated := uint64(0)
+
+	i := 0
+	for i < len(fluxData) {
+		b := fluxData[i]
+
+		if b == 0xFF {
+			// Special opcode
+			if i+1 >= len(fluxData) {
+				break
+			}
+
+			opcode := fluxData[i+1]
+			i += 2
+
+			switch opcode {
+			case FLUXOP_INDEX:
+				// Index pulse marker
+				n28, consumed, err := readN28(fluxData, i)
+				if err != nil {
+					break
+				}
+				i += consumed
+				indexTime := ticksAccumulated + uint64(n28)
+				indexPulses = append(indexPulses, uint64(float64(indexTime)*clockPeriodNs))
+
+			case FLUXOP_SPACE:
+				// Time gap with no transitions
+				n28, consumed, err := readN28(fluxData, i)
+				if err != nil {
+					break
+				}
+				i += consumed
+				ticksAccumulated += uint64(n28)
+
+			default:
+				// Unknown opcode, skip
+			}
+		} else if b < 250 {
+			// Direct interval: 1-249 ticks
+			ticksAccumulated += uint64(b)
+			i++
+		} else {
+			// Extended interval: 250-254
+			if i+1 >= len(fluxData) {
+				break
+			}
+			delta := 250 + uint64(b-250)*255 + uint64(fluxData[i+1]) - 1
+			ticksAccumulated += delta
+			i += 2
+		}
+	}
+
+	// Need at least 2 index pulses to calculate rotation period
+	if len(indexPulses) < 2 {
+		return 300 // Default RPM
+	}
+
+	// Calculate average rotation period from consecutive index pulses
+	var totalPeriodNs uint64 = 0
+	periodCount := 0
+
+	for i := 1; i < len(indexPulses); i++ {
+		period := indexPulses[i] - indexPulses[i-1]
+		if period > 0 {
+			totalPeriodNs += period
+			periodCount++
+		}
+	}
+
+	if periodCount == 0 || totalPeriodNs == 0 {
+		return 300 // Default RPM
+	}
+
+	// Calculate average period in seconds
+	avgPeriodNs := float64(totalPeriodNs) / float64(periodCount)
+	avgPeriodSeconds := avgPeriodNs / 1e9
+
+	// Calculate RPM: 60 seconds per minute / period in seconds
+	rpm := 60.0 / avgPeriodSeconds
+
+	// Round to either 300 or 360 RPM (standard floppy drive speeds)
+	// Use 330 RPM as the threshold (midpoint between 300 and 360)
+	if rpm < 330 {
+		return 300
+	}
+	return 360
+}
+
+// calculateBitRateFromFlux extracts flux transitions and calculates the average bitcell period
+// to determine the bitrate in kbps. Returns the calculated bitrate, or 250 (default) if calculation fails.
+func (c *Client) calculateBitRateFromFlux(fluxData []byte) uint16 {
+	if len(fluxData) == 0 {
+		return 250 // Default bitrate
+	}
+
+	// Decode Greaseweazle flux stream to get transition times
+	var transitions []uint64 // Times in nanoseconds
+
+	clockPeriodNs := 1e9 / float64(c.firmwareInfo.SampleFreqHz) // Nanoseconds per tick
+	ticksAccumulated := uint64(0)
+
+	i := 0
+	for i < len(fluxData) {
+		b := fluxData[i]
+
+		if b == 0xFF {
+			// Special opcode
+			if i+1 >= len(fluxData) {
+				break
+			}
+
+			opcode := fluxData[i+1]
+			i += 2
+
+			switch opcode {
+			case FLUXOP_INDEX:
+				// Index pulse marker - skip it for bitrate calculation
+				_, consumed, err := readN28(fluxData, i)
+				if err != nil {
+					break
+				}
+				i += consumed
+				// Don't add to transitions, just skip
+
+			case FLUXOP_SPACE:
+				// Time gap with no transitions
+				n28, consumed, err := readN28(fluxData, i)
+				if err != nil {
+					break
+				}
+				i += consumed
+				ticksAccumulated += uint64(n28)
+
+			default:
+				// Unknown opcode, skip
+			}
+		} else if b < 250 {
+			// Direct interval: 1-249 ticks
+			ticksAccumulated += uint64(b)
+			transitionTime := uint64(float64(ticksAccumulated) * clockPeriodNs)
+			transitions = append(transitions, transitionTime)
+			i++
+		} else {
+			// Extended interval: 250-254
+			if i+1 >= len(fluxData) {
+				break
+			}
+			delta := 250 + uint64(b-250)*255 + uint64(fluxData[i+1]) - 1
+			ticksAccumulated += delta
+			transitionTime := uint64(float64(ticksAccumulated) * clockPeriodNs)
+			transitions = append(transitions, transitionTime)
+			i += 2
+		}
+	}
+
+	// Need at least 2 transitions to calculate bitcell period
+	if len(transitions) < 2 {
+		return 250 // Default bitrate
+	}
+
+	// Use simplified PLL to estimate bitcell period
+	// Initialize with nominal period
+	pllPeriod := float64(MFM_NOMINAL_PERIOD_NS)
+
+	// Use first few transitions to lock PLL
+	lastTransitionTime := transitions[0]
+	sampleCount := 0
+	maxSamples := 100
+	if len(transitions) < maxSamples {
+		maxSamples = len(transitions)
+	}
+
+	for i := 1; i < maxSamples; i++ {
+		deltaTime := float64(transitions[i] - lastTransitionTime)
+
+		// Calculate how many periods this interval represents
+		periods := deltaTime / pllPeriod
+
+		// Calculate phase error
+		phaseError := periods - float64(int(periods+0.5))
+
+		// Adjust period (with damping)
+		pllPeriod += PLL_DAMPING * phaseError * pllPeriod
+
+		// Clamp period to reasonable range (±50% of nominal)
+		if pllPeriod < MFM_NOMINAL_PERIOD_NS*0.5 {
+			pllPeriod = MFM_NOMINAL_PERIOD_NS * 0.5
+		}
+		if pllPeriod > MFM_NOMINAL_PERIOD_NS*1.5 {
+			pllPeriod = MFM_NOMINAL_PERIOD_NS * 1.5
+		}
+
+		lastTransitionTime = transitions[i]
+		sampleCount++
+	}
+
+	if sampleCount == 0 {
+		return 250 // Default bitrate
+	}
+
+	// Convert bitcell period to bitrate
+	// HFE BitRate is the bitcell rate in kbps (not the data rate)
+	// For MFM: bitcell rate = 1,000,000 / period_ns
+	bitcellRateKbps := 1_000_000.0 / pllPeriod
+
+	// Round to standard floppy drive bitrates: 250, 500, or 1000 kbps
+	// Use thresholds: < 375 -> 250, < 750 -> 500, >= 750 -> 1000
+	if bitcellRateKbps < 375 {
+		return 250
+	} else if bitcellRateKbps < 750 {
+		return 500
+	}
+	return 1000
+}
+
+// decodeFluxToMFM decodes raw Greaseweazle flux data, applies PLL clock recovery,
+// and returns MFM bitstream as bytes (bitcells packed MSB-first)
+func (c *Client) decodeFluxToMFM(fluxData []byte) ([]byte, error) {
 	if len(fluxData) == 0 {
 		return nil, fmt.Errorf("empty flux data")
 	}
@@ -771,48 +1005,21 @@ func (c *Client) decodeFlux(fluxData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("no bitcells generated")
 	}
 
-	// Step 4: Decode MFM bitcells to bytes
-	// MFM encoding: clock bit (odd positions) + data bit (even positions)
-	// We need to extract data bits (every other bit starting from position 1)
-	var decodedBytes []byte
-
-	// Search for sync pattern (0x4489 in MFM: 0100010010001001)
-	// This helps align the bit stream
-	syncPattern := []bool{false, true, false, false, false, true, false, false, true, false, false, false, true, false, false, true}
-
-	startIdx := 0
-	if len(bitcells) >= len(syncPattern) {
-		// Try to find sync pattern
-		for i := 0; i <= len(bitcells)-len(syncPattern); i++ {
-			match := true
-			for j := 0; j < len(syncPattern); j++ {
-				if bitcells[i+j] != syncPattern[j] {
-					match = false
-					break
-				}
-			}
-			if match {
-				startIdx = i
-				break
-			}
-		}
-	}
-
-	// Extract data bits - bitcells already contains the decoded data bits
-	// Pack them sequentially into bytes
+	// Step 4: Pack bitcells as bytes (MSB-first)
+	// Each bitcell becomes one bit in the output
+	var mfmBytes []byte
 	currentByte := byte(0)
 	bitCount := 0
 
-	for i := startIdx; i < len(bitcells); i++ {
-		// Add data bit to current byte
-		if bitcells[i] {
+	for _, bit := range bitcells {
+		if bit {
 			currentByte |= 1 << (7 - bitCount)
 		}
 		bitCount++
 
 		// When we have 8 bits, save the byte and start a new one
 		if bitCount == 8 {
-			decodedBytes = append(decodedBytes, currentByte)
+			mfmBytes = append(mfmBytes, currentByte)
 			currentByte = 0
 			bitCount = 0
 		}
@@ -820,25 +1027,17 @@ func (c *Client) decodeFlux(fluxData []byte) ([]byte, error) {
 
 	// Add any remaining partial byte
 	if bitCount > 0 {
-		decodedBytes = append(decodedBytes, currentByte)
+		mfmBytes = append(mfmBytes, currentByte)
 	}
 
-	if len(decodedBytes) == 0 {
-		return nil, fmt.Errorf("no bytes decoded from bitcells")
+	if len(mfmBytes) == 0 {
+		return nil, fmt.Errorf("no MFM bytes generated")
 	}
 
-	return decodedBytes, nil
+	return mfmBytes, nil
 }
 
-// absInt64 returns the absolute value of an int64
-func absInt64(x int64) int64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
-// Read reads the entire floppy disk and writes it to the specified filename
+// Read reads the entire floppy disk and writes it to the specified filename as HFE format
 func (c *Client) Read(filename string) error {
 	// Select drive 0 and turn on motor
 	err := c.SelectDrive(0)
@@ -849,19 +1048,35 @@ func (c *Client) Read(filename string) error {
 	if err != nil {
 		return fmt.Errorf("failed to turn on motor: %w", err)
 	}
+	defer c.SetMotor(0, false) // Turn off motor when done
 
-	// Open output file
-	file, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+	// Initialize HFE disk structure
+	disk := &hfe.Disk{
+		Header: hfe.Header{
+			NumberOfTrack:       80,
+			NumberOfSide:        2,
+			TrackEncoding:       hfe.ENC_ISOIBM_MFM,
+			BitRate:             250,              // Will be calculated from flux data
+			FloppyRPM:           300,              // Will be calculated from flux data
+			FloppyInterfaceMode: hfe.IFM_IBMPC_DD, // Default to double density
+			WriteProtected:      0xFF,             // Not write protected
+			WriteAllowed:        0xFF,             // Write allowed
+			SingleStep:          0xFF,             // Single step mode
+			Track0S0AltEncoding: 0xFF,             // Use default encoding
+			Track0S0Encoding:    hfe.ENC_ISOIBM_MFM,
+			Track0S1AltEncoding: 0xFF, // Use default encoding
+			Track0S1Encoding:    hfe.ENC_ISOIBM_MFM,
+		},
+		Tracks: make([]hfe.TrackData, 80),
 	}
-	defer file.Close()
 
 	// Iterate through 80 cylinders (0-79) and 2 heads (0-1)
 	for cyl := 0; cyl < 80; cyl++ {
 		for head := 0; head < 2; head++ {
 			// Print progress message
-			fmt.Printf("\rReading track %d, side %d...", cyl, head)
+			if cyl != 0 || head != 0 {
+                            fmt.Printf("\rReading track %d, side %d...", cyl, head)
+                        }
 
 			// Seek to cylinder
 			err = c.Seek(byte(cyl))
@@ -876,15 +1091,27 @@ func (c *Client) Read(filename string) error {
 			}
 
 			// Read flux data (0 ticks = no limit, 2 index pulses = 2 revolutions)
-			data, err := c.ReadFlux(0, 2)
+			fluxData, err := c.ReadFlux(0, 2)
 			if err != nil {
 				return fmt.Errorf("failed to read flux data from cylinder %d, head %d: %w", cyl, head, err)
 			}
 
-			// Decode flux data using PLL and MFM decoding
-			decodedData, err := c.decodeFlux(data)
+			// Calculate RPM and BitRate from first track (cylinder 0, head 0)
+			if cyl == 0 && head == 0 {
+				calculatedRPM := c.calculateRPMFromFlux(fluxData)
+				fmt.Printf("Rotation Speed: %d RPM\n", calculatedRPM)
+
+				calculatedBitRate := c.calculateBitRateFromFlux(fluxData)
+				fmt.Printf("Bit Rate: %d kbps\n", calculatedBitRate)
+
+				disk.Header.FloppyRPM = calculatedRPM
+				disk.Header.BitRate = calculatedBitRate
+			}
+
+			// Decode flux data to MFM bitstream
+			mfmBitstream, err := c.decodeFluxToMFM(fluxData)
 			if err != nil {
-				return fmt.Errorf("failed to decode flux data from cylinder %d, head %d: %w", cyl, head, err)
+				return fmt.Errorf("failed to decode flux data to MFM from cylinder %d, head %d: %w", cyl, head, err)
 			}
 
 			// Check flux status
@@ -893,14 +1120,22 @@ func (c *Client) Read(filename string) error {
 				return fmt.Errorf("flux status error after reading cylinder %d, head %d: %w", cyl, head, err)
 			}
 
-			// Write decoded data to file
-			_, err = file.Write(decodedData)
-			if err != nil {
-				return fmt.Errorf("failed to write data to file: %w", err)
+			// Store MFM bitstream in appropriate side
+			if head == 0 {
+				disk.Tracks[cyl].Side0 = mfmBitstream
+			} else {
+				disk.Tracks[cyl].Side1 = mfmBitstream
 			}
 		}
 	}
 	fmt.Printf(" Done\n")
+
+	// Write HFE file
+	fmt.Printf("Writing HFE file...\n")
+	err = hfe.Write(filename, disk)
+	if err != nil {
+		return fmt.Errorf("failed to write HFE file: %w", err)
+	}
 
 	return nil
 }
