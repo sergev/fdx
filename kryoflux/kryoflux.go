@@ -2,6 +2,7 @@ package kryoflux
 
 import (
 	_ "embed"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"strconv"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"floppy/adapter"
+	"floppy/hfe"
+	"floppy/pll"
 
 	"github.com/google/gousb"
 	"go.bug.st/serial/enumerator"
@@ -49,7 +52,17 @@ const (
 	AsyncReadBufferSize  = 6400
 	AsyncReadBufferCount = 100
 	StreamOnValue        = 0x601
+
+	// Default Sample Clock (Hz) - can be overridden by KFInfo blocks
+	DefaultSampleClock = 24027428.57142857
 )
+
+// DecodedStreamData contains decoded flux transitions and index information
+type DecodedStreamData struct {
+	FluxTransitions []uint64 // Flux transition times in nanoseconds (relative to first index)
+	IndexPulses     []uint64 // Index pulse times in nanoseconds
+	SampleClock     float64  // Sample clock frequency in Hz
+}
 
 // Client wraps a USB connection to a KryoFlux device
 type Client struct {
@@ -971,7 +984,431 @@ func (c *Client) captureStream(file *os.File) error {
 	return nil
 }
 
-// Read reads the entire floppy disk and writes it to the specified filename
+// captureStreamToMemory captures a stream from the device and returns the raw stream data
+func (c *Client) captureStreamToMemory() ([]byte, error) {
+	state := &streamState{
+		complete:     false,
+		failed:       false,
+		resultFound:  false,
+		currentPos:   0,
+		skipCount:    0,
+		firstOOBSeen: false,
+	}
+
+	var streamData []byte
+
+	// Channel for reading data
+	dataChan := make(chan []byte, AsyncReadBufferCount)
+	errChan := make(chan error, 1)
+	doneChan := make(chan bool, 1)
+	readDoneChan := make(chan bool, 1)
+	streamStarted := false
+
+	// Start async read in goroutine
+	go func() {
+		defer func() {
+			readDoneChan <- true
+		}()
+		buf := make([]byte, AsyncReadBufferSize)
+		for {
+			select {
+			case <-doneChan:
+				return
+			default:
+				length, err := c.bulkIn.Read(buf)
+				if err != nil {
+					select {
+					case <-doneChan:
+						return
+					default:
+						if state.complete {
+							return
+						}
+						errChan <- err
+						return
+					}
+				}
+				if length == 0 {
+					continue
+				}
+				data := make([]byte, length)
+				copy(data, buf[:length])
+				select {
+				case dataChan <- data:
+				case <-doneChan:
+					return
+				}
+			}
+		}
+	}()
+
+	// Start stream
+	err := c.streamOn()
+	if err != nil {
+		doneChan <- true
+		<-readDoneChan
+		return nil, fmt.Errorf("failed to start stream: %w", err)
+	}
+	streamStarted = true
+
+	// Process incoming data
+	processing := true
+	for processing {
+		select {
+		case data := <-dataChan:
+			// Validate the data first
+			shouldContinue := c.validateStreamData(state, data)
+			// Append the data if validation passed
+			if !state.failed {
+				streamData = append(streamData, data...)
+			}
+			// Stop processing if validation says to stop or if stream completed/failed
+			if !shouldContinue || state.complete || state.failed {
+				processing = false
+			}
+		case err := <-errChan:
+			if state.complete {
+				processing = false
+				break
+			}
+			doneChan <- true
+			<-readDoneChan
+			if streamStarted {
+				c.controlIn(RequestStream, 0, true)
+			}
+			return nil, fmt.Errorf("failed to read stream data: %w", err)
+		case <-time.After(30 * time.Second):
+			doneChan <- true
+			<-readDoneChan
+			if streamStarted {
+				c.controlIn(RequestStream, 0, true)
+			}
+			return nil, fmt.Errorf("stream read timeout")
+		}
+	}
+
+	// Drain any remaining data from channel
+	draining := true
+	for draining {
+		select {
+		case data := <-dataChan:
+			c.validateStreamData(state, data)
+			if !state.failed {
+				streamData = append(streamData, data...)
+			}
+		default:
+			draining = false
+		}
+	}
+
+	// Signal goroutine to stop and wait for it to finish
+	doneChan <- true
+	<-readDoneChan
+
+	// Stop stream only if we started it successfully
+	if streamStarted {
+		_, err = c.controlIn(RequestStream, 0, true)
+		if err != nil {
+			// Log but don't return error
+		}
+	}
+
+	if state.failed {
+		if state.failureReason != "" {
+			return nil, fmt.Errorf("stream validation failed: %s", state.failureReason)
+		}
+		return nil, fmt.Errorf("stream validation failed")
+	}
+	if !state.complete {
+		return nil, fmt.Errorf("stream did not complete properly (resultFound=%v, currentPos=%d)", state.resultFound, state.currentPos)
+	}
+
+	return streamData, nil
+}
+
+// decodeKryoFluxStream decodes KryoFlux stream data to extract flux transitions and index pulses
+func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
+	result := &DecodedStreamData{
+		SampleClock: DefaultSampleClock,
+	}
+
+	tickPeriodNs := 1e9 / result.SampleClock // Nanoseconds per tick
+	ticksAccumulated := uint64(0)
+	ovl16Count := uint64(0) // Count of consecutive Ovl16 blocks
+
+	var fluxTransitions []uint64
+	var indexPulses []uint64
+	var firstIndexSeen bool
+	var firstIndexTime uint64
+
+	i := 0
+	for i < len(data) {
+		val := data[i]
+
+		if val <= 7 {
+			// Flux2 block: 2-byte sequence
+			if i+1 >= len(data) {
+				return nil, fmt.Errorf("incomplete Flux2 block at offset %d", i)
+			}
+			fluxValue := (uint32(val) << 8) | uint32(data[i+1])
+			fluxValue += uint32(ovl16Count) * 0x10000
+			ovl16Count = 0
+			ticksAccumulated += uint64(fluxValue)
+			if firstIndexSeen {
+				// Only collect flux transitions after first index
+				transitionTime := uint64(float64(ticksAccumulated)*tickPeriodNs) - firstIndexTime
+				fluxTransitions = append(fluxTransitions, transitionTime)
+			}
+			i += 2
+		} else if val == 0x0b {
+			// Ovl16 block: add 0x10000 to next flux value
+			ovl16Count++
+			i++
+		} else if val == 0x0c {
+			// Flux3 block: 3-byte sequence
+			if i+2 >= len(data) {
+				return nil, fmt.Errorf("incomplete Flux3 block at offset %d", i)
+			}
+			fluxValue := (uint32(data[i+1]) << 8) | uint32(data[i+2])
+			fluxValue += uint32(ovl16Count) * 0x10000
+			ovl16Count = 0
+			ticksAccumulated += uint64(fluxValue)
+			if firstIndexSeen {
+				// Only collect flux transitions after first index
+				transitionTime := uint64(float64(ticksAccumulated)*tickPeriodNs) - firstIndexTime
+				fluxTransitions = append(fluxTransitions, transitionTime)
+			}
+			i += 3
+		} else if val == 0x0d {
+			// OOB block: 4-byte header + optional data
+			if i+3 >= len(data) {
+				return nil, fmt.Errorf("incomplete OOB header at offset %d", i)
+			}
+			oobType := data[i+1]
+			oobSize := uint32(data[i+2]) | (uint32(data[i+3]) << 8)
+
+			if oobType == 0x0d && oobSize == 0x0d0d {
+				// EOF marker - stop processing
+				break
+			}
+
+			if i+4+int(oobSize) > len(data) {
+				return nil, fmt.Errorf("incomplete OOB data at offset %d", i)
+			}
+
+			// Handle Index block (type 0x02)
+			if oobType == 0x02 && oobSize >= 12 {
+				// Index block: Stream Position (4 bytes), Sample Counter (4 bytes), Index Counter (4 bytes)
+				sampleCounter := binary.LittleEndian.Uint32(data[i+4 : i+8])
+				indexTime := ticksAccumulated + uint64(sampleCounter)
+				indexTimeNs := uint64(float64(indexTime) * tickPeriodNs)
+				indexPulses = append(indexPulses, indexTimeNs)
+
+				if !firstIndexSeen {
+					firstIndexSeen = true
+					firstIndexTime = indexTimeNs
+					// Start collecting flux transitions from this point forward
+					fluxTransitions = nil
+				}
+			}
+
+			// Handle KFInfo block (type 0x04) to extract sample clock
+			if oobType == 0x04 && oobSize > 0 {
+				infoData := string(data[i+4 : i+4+int(oobSize)])
+				// Parse sck= value from info string
+				if strings.Contains(infoData, "sck=") {
+					parts := strings.Split(infoData, ",")
+					for _, part := range parts {
+						if strings.HasPrefix(part, "sck=") {
+							sckStr := strings.TrimPrefix(part, "sck=")
+							sckStr = strings.TrimSpace(sckStr)
+							if sck, err := strconv.ParseFloat(sckStr, 64); err == nil {
+								result.SampleClock = sck
+								tickPeriodNs = 1e9 / result.SampleClock
+							}
+						}
+					}
+				}
+			}
+
+			i += 4 + int(oobSize)
+		} else if val >= 0x0e {
+			// Flux1 block: 1-byte (0x0E-0xFF)
+			fluxValue := uint32(val)
+			fluxValue += uint32(ovl16Count) * 0x10000
+			ovl16Count = 0
+			ticksAccumulated += uint64(fluxValue)
+			if firstIndexSeen {
+				// Only collect flux transitions after first index
+				transitionTime := uint64(float64(ticksAccumulated)*tickPeriodNs) - firstIndexTime
+				fluxTransitions = append(fluxTransitions, transitionTime)
+			}
+			i++
+		} else {
+			// NOP blocks: 0x08 (1 byte), 0x09 (2 bytes), 0x0a (3 bytes)
+			if val == 0x08 {
+				i++
+			} else if val == 0x09 {
+				i += 2
+			} else if val == 0x0a {
+				i += 3
+			} else {
+				return nil, fmt.Errorf("unknown block type 0x%02x at offset %d", val, i)
+			}
+		}
+	}
+
+	// Only keep transitions from first index to second index (one revolution)
+	if len(indexPulses) >= 2 {
+		secondIndexTime := indexPulses[1] - firstIndexTime
+		var filteredTransitions []uint64
+		for _, trans := range fluxTransitions {
+			if trans <= secondIndexTime {
+				filteredTransitions = append(filteredTransitions, trans)
+			} else {
+				break
+			}
+		}
+		fluxTransitions = filteredTransitions
+	}
+
+	result.FluxTransitions = fluxTransitions
+	result.IndexPulses = indexPulses
+
+	return result, nil
+}
+
+// calculateRPMAndBitRate calculates RPM and bit rate from decoded stream data
+func (c *Client) calculateRPMAndBitRate(decoded *DecodedStreamData) (uint16, uint16) {
+	if len(decoded.IndexPulses) < 2 {
+		return 300, 250 // Default RPM and bit rate
+	}
+
+	// Calculate RPM from index pulse intervals
+	// IndexPulses contains absolute times, so subtract to get interval
+	trackDurationNs := decoded.IndexPulses[1] - decoded.IndexPulses[0]
+	rpm := 60e9 / float64(trackDurationNs)
+
+	// Round to either 300 or 360 RPM
+	var roundedRPM uint16
+	if rpm < 330 {
+		roundedRPM = 300
+	} else {
+		roundedRPM = 360
+	}
+
+	// Calculate bit rate from transition count and track duration
+	transitionCount := uint64(len(decoded.FluxTransitions))
+	bitsPerMsec := transitionCount * 1e6 / trackDurationNs
+
+	// Round to standard floppy drive bitrates: 250, 500, or 1000 kbps
+	var roundedBitRate uint16
+	if bitsPerMsec < 375 {
+		roundedBitRate = 250
+	} else if bitsPerMsec < 750 {
+		roundedBitRate = 500
+	} else {
+		roundedBitRate = 1000
+	}
+
+	return roundedRPM, roundedBitRate
+}
+
+// kfFluxIterator provides flux intervals from KryoFlux decoded stream data
+// It implements pll.FluxSource interface
+type kfFluxIterator struct {
+	transitions []uint64 // Absolute transition times in nanoseconds
+	index       int      // Current index into transitions
+	lastTime    uint64   // Last transition time (for calculating intervals)
+}
+
+// NextFlux returns the next flux interval in nanoseconds (time until next transition)
+// Returns 0 if no more transitions available
+// Implements pll.FluxSource interface
+func (fi *kfFluxIterator) NextFlux() uint64 {
+	if fi.index >= len(fi.transitions) {
+		return 0 // No more transitions
+	}
+
+	nextTime := fi.transitions[fi.index]
+	interval := nextTime - fi.lastTime
+	fi.lastTime = nextTime
+	fi.index++
+	return interval
+}
+
+// decodeFluxToMFM recovers raw MFM bitcells from KryoFlux decoded stream data using PLL,
+// and returns MFM bitcells as bytes (bitcells packed MSB-first, not decoded data bits)
+func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) ([]byte, error) {
+	if len(decoded.FluxTransitions) == 0 {
+		return nil, fmt.Errorf("no flux transitions found")
+	}
+
+	// Create flux iterator from transition times
+	fi := &kfFluxIterator{
+		transitions: decoded.FluxTransitions,
+		index:       0,
+		lastTime:    0, // Start from time 0
+	}
+
+	// Initialize PLL
+	pllState := &pll.State{}
+	pll.Init(pllState, bitRateKhz)
+
+	// Ignore first half-bit (as done in reference implementation)
+	_ = pll.NextBit(pllState, fi)
+
+	// Generate MFM bitcells using PLL algorithm
+	var bitcells []bool
+	for {
+		first := pll.NextBit(pllState, fi)
+		second := pll.NextBit(pllState, fi)
+
+		bitcells = append(bitcells, first)
+		bitcells = append(bitcells, second)
+
+		if fi.index >= len(fi.transitions) {
+			// No more transitions available
+			break
+		}
+	}
+
+	if len(bitcells) == 0 {
+		return nil, fmt.Errorf("no bitcells generated")
+	}
+
+	// Pack bitcells as bytes (MSB-first)
+	var mfmBytes []byte
+	currentByte := byte(0)
+	bitCount := 0
+
+	for _, bit := range bitcells {
+		if bit {
+			currentByte |= 1 << (7 - bitCount)
+		}
+		bitCount++
+
+		// When we have 8 bits, save the byte and start a new one
+		if bitCount == 8 {
+			mfmBytes = append(mfmBytes, currentByte)
+			currentByte = 0
+			bitCount = 0
+		}
+	}
+
+	// Add any remaining partial byte
+	if bitCount > 0 {
+		mfmBytes = append(mfmBytes, currentByte)
+	}
+
+	if len(mfmBytes) == 0 {
+		return nil, fmt.Errorf("no MFM bytes generated")
+	}
+
+	return mfmBytes, nil
+}
+
+// Read reads the entire floppy disk and writes it to the specified filename as HFE format
 func (c *Client) Read(filename string) error {
 	// Configure device with default values (device=0, density=0, minTrack=0, maxTrack=83)
 	err := c.configure(0, 0, 0, 83)
@@ -979,35 +1416,74 @@ func (c *Client) Read(filename string) error {
 		return fmt.Errorf("failed to configure device: %w", err)
 	}
 
-	// Open output file
-	file, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+	// Initialize HFE disk structure
+	NumberOfTracks := 82
+	disk := &hfe.Disk{
+		Header: hfe.Header{
+			NumberOfTrack:       uint8(NumberOfTracks),
+			NumberOfSide:        2,
+			TrackEncoding:       hfe.ENC_ISOIBM_MFM,
+			BitRate:             500,              // Will be calculated from flux data
+			FloppyRPM:           300,              // Will be calculated from flux data
+			FloppyInterfaceMode: hfe.IFM_IBMPC_DD, // Default to double density
+			WriteProtected:      0xFF,             // Not write protected
+			WriteAllowed:        0xFF,             // Write allowed
+			SingleStep:          0xFF,             // Single step mode
+			Track0S0AltEncoding: 0xFF,             // Use default encoding
+			Track0S0Encoding:    hfe.ENC_ISOIBM_MFM,
+			Track0S1AltEncoding: 0xFF, // Use default encoding
+			Track0S1Encoding:    hfe.ENC_ISOIBM_MFM,
+		},
+		Tracks: make([]hfe.TrackData, NumberOfTracks),
 	}
-	defer file.Close()
 
-	// Loop through tracks (0-79) and sides (0-1)
-	for track := 0; track < 80; track++ {
+	// Iterate through cylinders and sides
+	for cyl := 0; cyl < NumberOfTracks; cyl++ {
 		for side := 0; side < 2; side++ {
-                        // Print progress message
-                        fmt.Printf("\rReading track %d, side %d...", track, side)
+			// Print progress message
+			if cyl != 0 || side != 0 {
+				fmt.Printf("\rReading track %d, side %d...", cyl, side)
+			}
 
 			// Turn on motor and position head
-			err = c.motorOn(side, track)
+			err = c.motorOn(side, cyl)
 			if err != nil {
-				return fmt.Errorf("failed to position head at track %d, side %d: %w", track, side, err)
+				return fmt.Errorf("failed to position head at track %d, side %d: %w", cyl, side, err)
 			}
 
-			// Write preamble for this track/side
-			err = c.writePreamble(file)
+			// Capture stream data to memory
+			streamData, err := c.captureStreamToMemory()
 			if err != nil {
-				return fmt.Errorf("failed to write preamble for track %d, side %d: %w", track, side, err)
+				return fmt.Errorf("failed to capture stream from track %d, side %d: %w", cyl, side, err)
 			}
 
-			// Capture stream data
-			err = c.captureStream(file)
+			// Decode stream data to extract flux transitions
+			decoded, err := c.decodeKryoFluxStream(streamData)
 			if err != nil {
-				return fmt.Errorf("failed to capture stream from track %d, side %d: %w", track, side, err)
+				return fmt.Errorf("failed to decode stream from track %d, side %d: %w", cyl, side, err)
+			}
+
+			// Calculate RPM and BitRate from first track (cylinder 0, head 0)
+			if cyl == 0 && side == 0 {
+				calculatedRPM, calculatedBitRate := c.calculateRPMAndBitRate(decoded)
+				fmt.Printf("Rotation Speed: %d RPM\n", calculatedRPM)
+				fmt.Printf("Bit Rate: %d kbps\n", calculatedBitRate)
+
+				disk.Header.FloppyRPM = calculatedRPM
+				disk.Header.BitRate = calculatedBitRate
+			}
+
+			// Decode flux data to MFM bitstream
+			mfmBitstream, err := c.decodeFluxToMFM(decoded, disk.Header.BitRate)
+			if err != nil {
+				return fmt.Errorf("failed to decode flux data to MFM from track %d, side %d: %w", cyl, side, err)
+			}
+
+			// Store MFM bitstream in appropriate side
+			if side == 0 {
+				disk.Tracks[cyl].Side0 = mfmBitstream
+			} else {
+				disk.Tracks[cyl].Side1 = mfmBitstream
 			}
 		}
 	}
@@ -1017,6 +1493,13 @@ func (c *Client) Read(filename string) error {
 	err = c.motorOff()
 	if err != nil {
 		return fmt.Errorf("failed to turn off motor: %w", err)
+	}
+
+	// Write HFE file
+	fmt.Printf("Writing HFE file...\n")
+	err = hfe.Write(filename, disk)
+	if err != nil {
+		return fmt.Errorf("failed to write HFE file: %w", err)
 	}
 
 	return nil
