@@ -595,27 +595,17 @@ func pllInit(pll *pllState, bitRateKhz uint16) {
 	pll.clockedZeros = 0
 }
 
-// clockMin returns the minimum allowed clock period
-func clockMin(centre float64) float64 {
-	return (centre * (100 - CLOCK_MAX_ADJ)) / 100
-}
-
-// clockMax returns the maximum allowed clock period
-func clockMax(centre float64) float64 {
-	return (centre * (100 + CLOCK_MAX_ADJ)) / 100
-}
-
 // pllNextBit decodes and returns next bit from the flux input stream
 // Based on pll_next_bit() from legacy/mfmdisk/scp.c
 // Returns: 0 for clocked zero, 1 for transition detected
-func pllNextBit(pll *pllState, fi *fluxIterator) int {
+func pllNextBit(pll *pllState, fi *fluxIterator) bool {
 	// Accumulate flux until it exceeds clock/2
 	for pll.flux < pll.clock/2 {
 		fluxInterval := fi.nextFlux()
 		if fluxInterval == 0 {
 			// No more transitions, return 0 (clocked zero)
 			pll.clockedZeros++
-			return 0
+			return false // 0
 		}
 		pll.flux += float64(fluxInterval)
 	}
@@ -627,7 +617,7 @@ func pllNextBit(pll *pllState, fi *fluxIterator) int {
 	// Check if we have a clocked zero (flux >= clock/2 after subtraction)
 	if pll.flux >= pll.clock/2 {
 		pll.clockedZeros++
-		return 0
+		return false // 0
 	}
 
 	// Transition detected - adjust PLL parameters
@@ -641,11 +631,16 @@ func pllNextBit(pll *pllState, fi *fluxIterator) int {
 	}
 
 	// Clamp the clock's adjustment range
-	if pll.clock < clockMin(pll.clockExpected) {
-		pll.clock = clockMin(pll.clockExpected)
+        // the minimum allowed clock period
+	clockMin := (pll.clockExpected * (100 - CLOCK_MAX_ADJ)) / 100
+	if pll.clock < clockMin {
+		pll.clock = clockMin
 	}
-	if pll.clock > clockMax(pll.clockExpected) {
-		pll.clock = clockMax(pll.clockExpected)
+
+        // the maximum allowed clock period
+        clockMax := (pll.clockExpected * (100 + CLOCK_MAX_ADJ)) / 100
+	if pll.clock > clockMax {
+		pll.clock = clockMax
 	}
 
 	// PLL: Adjust clock phase according to mismatch
@@ -655,29 +650,7 @@ func pllNextBit(pll *pllState, fi *fluxIterator) int {
 	pll.flux = newFlux
 
 	pll.clockedZeros = 0
-	return 1
-}
-
-// pllNextBitcell returns the next MFM bitcell (1 = transition, 0 = no transition)
-// This calls pllNextBit() twice internally to get two half-bits per bitcell
-// Based on the reference implementation which outputs half-bits
-// In MFM, a bitcell consists of two half-bits, and mfm_read_bit() returns the second half-bit
-func pllNextBitcell(pll *pllState, fi *fluxIterator) (int, bool) {
-	// Get two half-bits for one bitcell
-	_ = pllNextBit(pll, fi)         // First half-bit (not used for bitcell value)
-	halfbit2 := pllNextBit(pll, fi) // Second half-bit (this is the bitcell value)
-
-	// Based on mfm_read_bit() in the reference: it returns the second half-bit (b)
-	// So we return halfbit2 as the bitcell value
-	return halfbit2, fi.index < len(fi.transitions)
-}
-
-// absInt64 returns the absolute value of an int64
-func absInt64(x int64) int64 {
-	if x < 0 {
-		return -x
-	}
-	return x
+	return true // 1
 }
 
 //
@@ -892,15 +865,16 @@ func (c *Client) decodeFluxToMFM(fluxData []byte, bitRateKhz uint16) ([]byte, er
 	// Ignore first half-bit (as done in reference implementation)
 	_ = pllNextBit(pll, fi)
 
-	var bitcells []bool // MFM bitcells: 10 = data 0, 01 = data 1
-
-	// Generate bitcells using PLL algorithm
+	// Generate MFM bitcells using PLL algorithm
+	var bitcells []bool
 	for {
-		bitcell, hasMore := pllNextBitcell(pll, fi)
-		bitcells = append(bitcells, bitcell == 0)
-		bitcells = append(bitcells, bitcell == 1)
+                first := pllNextBit(pll, fi)
+                second := pllNextBit(pll, fi)
 
-		if !hasMore {
+		bitcells = append(bitcells, first)
+		bitcells = append(bitcells, second)
+
+		if fi.index >= len(fi.transitions) {
 			// No more transitions available
 			break
 		}
