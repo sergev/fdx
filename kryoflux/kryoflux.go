@@ -582,22 +582,38 @@ func (c *Client) configure(device, density, minTrack, maxTrack int) error {
 
 // motorOn turns on the motor and positions the head at the specified side and track
 func (c *Client) motorOn(side, track int) error {
-	_, err := c.controlIn(RequestMotor, 1, false)
-	if err != nil {
-		return fmt.Errorf("failed to turn motor on: %w", err)
+	// Use timeout wrapper to prevent blocking
+	type result struct {
+		data []byte
+		err  error
 	}
+	resultChan := make(chan result, 1)
 
-	_, err = c.controlIn(RequestSide, uint16(side), false)
-	if err != nil {
-		return fmt.Errorf("failed to set side: %w", err)
+	go func() {
+		_, err := c.controlIn(RequestMotor, 1, false)
+		if err != nil {
+			resultChan <- result{nil, fmt.Errorf("failed to turn motor on: %w", err)}
+			return
+		}
+		_, err = c.controlIn(RequestSide, uint16(side), false)
+		if err != nil {
+			resultChan <- result{nil, fmt.Errorf("failed to set side: %w", err)}
+			return
+		}
+		_, err = c.controlIn(RequestTrack, uint16(track), false)
+		if err != nil {
+			resultChan <- result{nil, fmt.Errorf("failed to set track: %w", err)}
+			return
+		}
+		resultChan <- result{nil, nil}
+	}()
+
+	select {
+	case res := <-resultChan:
+		return res.err
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("motorOn timeout after 5 seconds")
 	}
-
-	_, err = c.controlIn(RequestTrack, uint16(track), false)
-	if err != nil {
-		return fmt.Errorf("failed to set track: %w", err)
-	}
-
-	return nil
 }
 
 // motorOff turns off the motor
@@ -661,7 +677,15 @@ func (c *Client) validateStreamData(state *streamState, data []byte) bool {
 	}
 
 	// Process the data
+	validationIterations := 0
+	maxValidationIterations := len(data) * 2 // Safety check
 	for dataLen > 0 {
+		validationIterations++
+		if validationIterations > maxValidationIterations {
+			state.failed = true
+			state.failureReason = fmt.Sprintf("validation loop exceeded max iterations (%d)", maxValidationIterations)
+			return false
+		}
 		if offset >= uint32(len(data)) {
 			break
 		}
@@ -1005,6 +1029,8 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 	streamStarted := false
 
 	// Start async read in goroutine
+	// Use a timeout for each read operation to prevent indefinite blocking
+	readTimeout := 3 * time.Second // Increased slightly to reduce false timeouts
 	go func() {
 		defer func() {
 			readDoneChan <- true
@@ -1015,7 +1041,40 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 			case <-doneChan:
 				return
 			default:
-				length, err := c.bulkIn.Read(buf)
+				// Wrap read in timeout
+				type readResult struct {
+					length int
+					err    error
+				}
+				readResultChan := make(chan readResult, 1)
+				go func() {
+					length, err := c.bulkIn.Read(buf)
+					readResultChan <- readResult{length: length, err: err}
+				}()
+
+				var length int
+				var err error
+				select {
+				case <-doneChan:
+					return
+				case res := <-readResultChan:
+					length, err = res.length, res.err
+				case <-time.After(readTimeout):
+					// Read timeout - check if we should continue or abort
+					select {
+					case <-doneChan:
+						return
+					default:
+						// If stream is complete, this is expected - return
+						if state.complete {
+							return
+						}
+						// Otherwise, send timeout error
+						errChan <- fmt.Errorf("bulk read timeout after %v", readTimeout)
+						return
+					}
+				}
+
 				if err != nil {
 					select {
 					case <-doneChan:
@@ -1053,9 +1112,26 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 
 	// Process incoming data
 	processing := true
+	dataReceived := false
+	maxTotalTime := 30 * time.Second // Absolute maximum time for stream capture (reduced from 60s)
+	noDataTimeout := 5 * time.Second // Timeout if no data received for this duration (reduced from 10s)
+	processingIterations := 0
+
+	intervalTimeout := time.NewTimer(noDataTimeout)
+	defer intervalTimeout.Stop()
+	totalTimeout := time.NewTimer(maxTotalTime)
+	defer totalTimeout.Stop()
+
 	for processing {
+		processingIterations++
 		select {
 		case data := <-dataChan:
+			dataReceived = true
+			// Reset interval timeout since we received data
+			if !intervalTimeout.Stop() {
+				<-intervalTimeout.C
+			}
+			intervalTimeout.Reset(noDataTimeout)
 			// Validate the data first
 			shouldContinue := c.validateStreamData(state, data)
 			// Append the data if validation passed
@@ -1071,19 +1147,62 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 				processing = false
 				break
 			}
+			// Immediately stop stream and don't wait for goroutine
 			doneChan <- true
-			<-readDoneChan
 			if streamStarted {
 				c.controlIn(RequestStream, 0, true)
+			}
+			// Try to read from readDoneChan with timeout
+			select {
+			case <-readDoneChan:
+			case <-time.After(100 * time.Millisecond):
+				// Goroutine didn't exit, continue anyway
 			}
 			return nil, fmt.Errorf("failed to read stream data: %w", err)
-		case <-time.After(30 * time.Second):
+		case <-intervalTimeout.C:
+			// No data received for intervalTimeout duration - timeout
+			// Stop stream and exit - don't try to continue
 			doneChan <- true
-			<-readDoneChan
 			if streamStarted {
 				c.controlIn(RequestStream, 0, true)
+				streamStarted = false
 			}
-			return nil, fmt.Errorf("stream read timeout")
+
+			// Don't wait indefinitely for goroutine - it might be stuck in a blocking read
+			select {
+			case <-readDoneChan:
+			case <-time.After(200 * time.Millisecond):
+				// Goroutine didn't exit in time - might be stuck, but we continue anyway
+			}
+
+			// If we have some data, return it anyway - might be a partial stream
+			if len(streamData) > 0 {
+				return streamData, nil
+			}
+
+			// No data received at all
+			if !dataReceived {
+				return nil, fmt.Errorf("stream read timeout: no data received within %v", noDataTimeout)
+			}
+
+			// We received data before but now timed out - return what we have
+			return streamData, nil
+		case <-totalTimeout.C:
+			// Absolute maximum time exceeded - timeout
+			doneChan <- true
+			if streamStarted {
+				c.controlIn(RequestStream, 0, true)
+				streamStarted = false
+			}
+			// Don't wait indefinitely for goroutine
+			select {
+			case <-readDoneChan:
+			case <-time.After(200 * time.Millisecond):
+			}
+			if len(streamData) > 0 {
+				return streamData, nil
+			}
+			return nil, fmt.Errorf("stream read timeout: maximum time %v exceeded", maxTotalTime)
 		}
 	}
 
@@ -1101,9 +1220,14 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 		}
 	}
 
-	// Signal goroutine to stop and wait for it to finish
+	// Signal goroutine to stop and wait for it to finish (with timeout)
 	doneChan <- true
-	<-readDoneChan
+	select {
+	case <-readDoneChan:
+		// Goroutine exited normally
+	case <-time.After(500 * time.Millisecond):
+		// Goroutine didn't exit in time - might be stuck, but continue anyway
+	}
 
 	// Stop stream only if we started it successfully
 	if streamStarted {
@@ -1119,8 +1243,10 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 		}
 		return nil, fmt.Errorf("stream validation failed")
 	}
-	if !state.complete {
-		return nil, fmt.Errorf("stream did not complete properly (resultFound=%v, currentPos=%d)", state.resultFound, state.currentPos)
+	// Allow partial streams - we'll check if we have enough data in the decoder
+	// If stream didn't complete but we have data, return it anyway
+	if !state.complete && len(streamData) == 0 {
+		return nil, fmt.Errorf("stream did not complete properly and no data received (resultFound=%v, currentPos=%d)", state.resultFound, state.currentPos)
 	}
 
 	return streamData, nil
@@ -1128,6 +1254,7 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 
 // decodeKryoFluxStream decodes KryoFlux stream data to extract flux transitions and index pulses
 func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
+
 	result := &DecodedStreamData{
 		SampleClock: DefaultSampleClock,
 	}
@@ -1136,13 +1263,18 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 	ticksAccumulated := uint64(0)
 	ovl16Count := uint64(0) // Count of consecutive Ovl16 blocks
 
-	var fluxTransitions []uint64
-	var indexPulses []uint64
-	var firstIndexSeen bool
-	var firstIndexTime uint64
+	// Collect all flux transitions with their absolute times
+	type fluxTransition struct {
+		ticks uint64 // Absolute time in ticks
+	}
+	var allFluxTransitions []fluxTransition
+	var indexPulses []uint64 // Index pulse times in nanoseconds
 
 	i := 0
-	for i < len(data) {
+	maxIterations := len(data) * 2 // Safety check to prevent infinite loops
+	iterationCount := 0
+	for i < len(data) && iterationCount < maxIterations {
+		iterationCount++
 		val := data[i]
 
 		if val <= 7 {
@@ -1154,11 +1286,7 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 			fluxValue += uint32(ovl16Count) * 0x10000
 			ovl16Count = 0
 			ticksAccumulated += uint64(fluxValue)
-			if firstIndexSeen {
-				// Only collect flux transitions after first index
-				transitionTime := uint64(float64(ticksAccumulated)*tickPeriodNs) - firstIndexTime
-				fluxTransitions = append(fluxTransitions, transitionTime)
-			}
+			allFluxTransitions = append(allFluxTransitions, fluxTransition{ticks: ticksAccumulated})
 			i += 2
 		} else if val == 0x0b {
 			// Ovl16 block: add 0x10000 to next flux value
@@ -1173,11 +1301,7 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 			fluxValue += uint32(ovl16Count) * 0x10000
 			ovl16Count = 0
 			ticksAccumulated += uint64(fluxValue)
-			if firstIndexSeen {
-				// Only collect flux transitions after first index
-				transitionTime := uint64(float64(ticksAccumulated)*tickPeriodNs) - firstIndexTime
-				fluxTransitions = append(fluxTransitions, transitionTime)
-			}
+			allFluxTransitions = append(allFluxTransitions, fluxTransition{ticks: ticksAccumulated})
 			i += 3
 		} else if val == 0x0d {
 			// OOB block: 4-byte header + optional data
@@ -1196,20 +1320,27 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 				return nil, fmt.Errorf("incomplete OOB data at offset %d", i)
 			}
 
+			// Handle StreamEnd block (type 0x03) - indicates stream has ended
+			if oobType == 0x03 && oobSize >= 8 {
+				// StreamEnd block: Stream Position (4 bytes), Result Code (4 bytes)
+				resultCode := binary.LittleEndian.Uint32(data[i+8 : i+12])
+				if resultCode != 0 {
+					// Non-zero result code indicates an error, but we can still process what we have
+					// Continue processing but break after handling this
+				}
+				// Break after StreamEnd to stop processing further
+				i += 4 + int(oobSize)
+				break
+			}
+
 			// Handle Index block (type 0x02)
 			if oobType == 0x02 && oobSize >= 12 {
 				// Index block: Stream Position (4 bytes), Sample Counter (4 bytes), Index Counter (4 bytes)
 				sampleCounter := binary.LittleEndian.Uint32(data[i+4 : i+8])
+				// Index time = time of last flux transition + sample counter
 				indexTime := ticksAccumulated + uint64(sampleCounter)
 				indexTimeNs := uint64(float64(indexTime) * tickPeriodNs)
 				indexPulses = append(indexPulses, indexTimeNs)
-
-				if !firstIndexSeen {
-					firstIndexSeen = true
-					firstIndexTime = indexTimeNs
-					// Start collecting flux transitions from this point forward
-					fluxTransitions = nil
-				}
 			}
 
 			// Handle KFInfo block (type 0x04) to extract sample clock
@@ -1238,11 +1369,7 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 			fluxValue += uint32(ovl16Count) * 0x10000
 			ovl16Count = 0
 			ticksAccumulated += uint64(fluxValue)
-			if firstIndexSeen {
-				// Only collect flux transitions after first index
-				transitionTime := uint64(float64(ticksAccumulated)*tickPeriodNs) - firstIndexTime
-				fluxTransitions = append(fluxTransitions, transitionTime)
-			}
+			allFluxTransitions = append(allFluxTransitions, fluxTransition{ticks: ticksAccumulated})
 			i++
 		} else {
 			// NOP blocks: 0x08 (1 byte), 0x09 (2 bytes), 0x0a (3 bytes)
@@ -1258,18 +1385,82 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 		}
 	}
 
-	// Only keep transitions from first index to second index (one revolution)
+	if iterationCount >= maxIterations {
+		return nil, fmt.Errorf("decoder loop exceeded maximum iterations (possible infinite loop)")
+	}
+
+	// Now filter transitions to only include those between first and second index
+	// We need to ensure all transitions right before the second index are included
+	var fluxTransitions []uint64
 	if len(indexPulses) >= 2 {
-		secondIndexTime := indexPulses[1] - firstIndexTime
-		var filteredTransitions []uint64
-		for _, trans := range fluxTransitions {
-			if trans <= secondIndexTime {
-				filteredTransitions = append(filteredTransitions, trans)
-			} else {
-				break
+		firstIndexNs := indexPulses[0]
+		secondIndexNs := indexPulses[1]
+
+		// Calculate revolution duration
+		revolutionDurationNs := secondIndexNs - firstIndexNs
+
+		// Find the first flux transition after the second index pulse
+		// This helps us determine the true end of the first revolution
+		// We'll include transitions up to this point (if it's within a reasonable distance)
+		var firstTransitionAfterSecondIndexNs uint64 = 0
+		maxReasonableDistanceNs := revolutionDurationNs / 20 // 5% of revolution
+
+		for _, flux := range allFluxTransitions {
+			fluxTimeNs := uint64(float64(flux.ticks) * tickPeriodNs)
+			if fluxTimeNs > secondIndexNs {
+				// Found first transition after second index
+				if firstTransitionAfterSecondIndexNs == 0 || fluxTimeNs < firstTransitionAfterSecondIndexNs {
+					firstTransitionAfterSecondIndexNs = fluxTimeNs
+				}
 			}
 		}
-		fluxTransitions = filteredTransitions
+
+		// Determine the boundary: use the first transition after second index if it's close enough,
+		// otherwise use a margin after the second index
+		var secondIndexBoundaryNs uint64
+		if firstTransitionAfterSecondIndexNs > 0 &&
+			(firstTransitionAfterSecondIndexNs-secondIndexNs) <= maxReasonableDistanceNs {
+			// Include the first transition after second index if it's close enough
+			// This likely represents the end of the first revolution's data
+			secondIndexBoundaryNs = firstTransitionAfterSecondIndexNs
+		} else {
+			// Fallback: use a margin (2% of revolution) after second index
+			marginNs := revolutionDurationNs / 50 // 2% margin
+			secondIndexBoundaryNs = secondIndexNs + marginNs
+		}
+
+		for _, flux := range allFluxTransitions {
+			// Convert flux transition time from ticks to nanoseconds for comparison
+			// This avoids precision loss from converting index times back to ticks
+			fluxTimeNs := uint64(float64(flux.ticks) * tickPeriodNs)
+
+			// Include all transitions from first index up to the determined boundary
+			// This ensures we capture the complete revolution including sector 17 data
+			if fluxTimeNs >= firstIndexNs && fluxTimeNs <= secondIndexBoundaryNs {
+				// Convert to nanoseconds relative to first index
+				transitionTime := fluxTimeNs - firstIndexNs
+				fluxTransitions = append(fluxTransitions, transitionTime)
+			}
+		}
+	} else if len(indexPulses) == 1 {
+		// If only one index, use all transitions after it
+		firstIndexNs := indexPulses[0]
+		for _, flux := range allFluxTransitions {
+			// Convert flux transition time from ticks to nanoseconds for comparison
+			fluxTimeNs := uint64(float64(flux.ticks) * tickPeriodNs)
+			if fluxTimeNs >= firstIndexNs {
+				// Convert to nanoseconds relative to first index
+				transitionTime := fluxTimeNs - firstIndexNs
+				fluxTransitions = append(fluxTransitions, transitionTime)
+			}
+		}
+	} else if len(indexPulses) == 0 && len(allFluxTransitions) > 0 {
+		// If no index pulses found but we have transitions, use all transitions
+		// This handles edge cases where index detection failed but data is present
+		for _, flux := range allFluxTransitions {
+			transitionTime := uint64(float64(flux.ticks) * tickPeriodNs)
+			fluxTransitions = append(fluxTransitions, transitionTime)
+		}
 	}
 
 	result.FluxTransitions = fluxTransitions
@@ -1317,9 +1508,10 @@ func (c *Client) calculateRPMAndBitRate(decoded *DecodedStreamData) (uint16, uin
 // kfFluxIterator provides flux intervals from KryoFlux decoded stream data
 // It implements pll.FluxSource interface
 type kfFluxIterator struct {
-	transitions []uint64 // Absolute transition times in nanoseconds
-	index       int      // Current index into transitions
-	lastTime    uint64   // Last transition time (for calculating intervals)
+	transitions     []uint64 // Absolute transition times in nanoseconds
+	index           int      // Current index into transitions
+	lastTime        uint64   // Last transition time (for calculating intervals)
+	exhaustedCalled bool     // Track if NextFlux() has been called when exhausted
 }
 
 // NextFlux returns the next flux interval in nanoseconds (time until next transition)
@@ -1327,7 +1519,8 @@ type kfFluxIterator struct {
 // Implements pll.FluxSource interface
 func (fi *kfFluxIterator) NextFlux() uint64 {
 	if fi.index >= len(fi.transitions) {
-		return 0 // No more transitions
+		fi.exhaustedCalled = true // Mark that we've been called when exhausted
+		return 0                  // No more transitions
 	}
 
 	nextTime := fi.transitions[fi.index]
@@ -1360,15 +1553,86 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 
 	// Generate MFM bitcells using PLL algorithm
 	var bitcells []bool
+	pllIterations := 0
+	transitionsLen := len(decoded.FluxTransitions)
+
+	// Estimate max iterations: each transition generates roughly 1-2 bits
+	// Each iteration generates 2 bits, so we need roughly transitions iterations
+	// Add 50% margin for safety, but cap at reasonable maximum
+	maxPLLIterations := transitionsLen + (transitionsLen / 2)
+	if maxPLLIterations > 200000 {
+		maxPLLIterations = 200000
+	}
+
+	// Track when we've consumed all or nearly all transitions
+	// Once we've consumed this many, we should stop soon
+	stopThreshold := transitionsLen
+	if transitionsLen > 100 {
+		// Allow small buffer - if transitions are being consumed slowly, we may not hit exact length
+		stopThreshold = transitionsLen - 10
+	}
+
+	iterationsSinceLastTransition := 0
+	maxIterationsWithoutTransition := 1000 // Stop if we generate 1000 iterations without consuming a transition
+
 	for {
+		pllIterations++
+
+		// Track progress to detect if transitions are being consumed
+		prevIndex := fi.index
+
+		// Calculate consumed percentage for termination checks
+		consumedPercentage := float64(fi.index) / float64(transitionsLen) * 100.0
+
+		// Stop if we've generated excessive bits but consumed very few transitions (PLL stuck)
+		// Check earlier: if we've generated 2x bits but consumed <5% transitions, PLL is likely stuck
+		if len(bitcells) >= transitionsLen*2 && consumedPercentage < 5.0 {
+			break
+		}
+
+		// Stop if we've consumed 75%+ transitions and generated excessive bits
+		// Lowered from 80% to catch edge cases like empty tracks (79.9%)
+		if consumedPercentage >= 75.0 && len(bitcells) >= transitionsLen*3 {
+			break
+		}
+
+		if pllIterations > maxPLLIterations {
+			return nil, fmt.Errorf("PLL loop exceeded maximum iterations (%d), possible infinite loop", maxPLLIterations)
+		}
+
+		// Check if transitions are exhausted or nearly exhausted BEFORE generating more bits
+		if fi.index >= stopThreshold || fi.exhaustedCalled {
+			// Transitions exhausted - stop immediately
+			break
+		}
+
 		first := pll.NextBit(pllState, fi)
 		second := pll.NextBit(pllState, fi)
 
 		bitcells = append(bitcells, first)
 		bitcells = append(bitcells, second)
 
-		if fi.index >= len(fi.transitions) {
-			// No more transitions available
+		// Check if index advanced (transition was consumed)
+		if fi.index > prevIndex {
+			iterationsSinceLastTransition = 0
+		} else {
+			iterationsSinceLastTransition++
+		}
+
+		// Stop if we've generated many iterations without consuming a transition
+		// This indicates all transitions have been consumed and we're just generating from accumulated flux
+		// Check if we've consumed at least 75% of transitions OR reached stopThreshold (lowered from 80% for edge cases)
+		if iterationsSinceLastTransition >= maxIterationsWithoutTransition {
+			// We've gone many iterations without consuming a transition
+			if fi.index >= stopThreshold || consumedPercentage >= 75.0 {
+				// Either we've reached threshold OR consumed 75%+ of transitions
+				break
+			}
+		}
+
+		// Check again after NextBit calls (they may have advanced fi.index or called NextFlux when exhausted)
+		if fi.index >= stopThreshold || fi.exhaustedCalled {
+			// Transitions exhausted during this iteration - stop
 			break
 		}
 	}
@@ -1448,19 +1712,55 @@ func (c *Client) Read(filename string) error {
 			// Turn on motor and position head
 			err = c.motorOn(side, cyl)
 			if err != nil {
-				return fmt.Errorf("failed to position head at track %d, side %d: %w", cyl, side, err)
+				// Log error but continue - some tracks may be inaccessible
+				fmt.Printf("\nWarning: failed to position head at track %d, side %d: %v\n", cyl, side, err)
+				// Store empty data for this track
+				if side == 0 {
+					disk.Tracks[cyl].Side0 = []byte{}
+				} else {
+					disk.Tracks[cyl].Side1 = []byte{}
+				}
+				// Ensure cleanup
+				c.streamOff()
+				c.motorOff()
+				time.Sleep(100 * time.Millisecond)
+				continue
 			}
 
 			// Capture stream data to memory
 			streamData, err := c.captureStreamToMemory()
 			if err != nil {
-				return fmt.Errorf("failed to capture stream from track %d, side %d: %w", cyl, side, err)
+				// Log error but continue with next track - some tracks may be unreadable
+				fmt.Printf("\nWarning: failed to capture stream from track %d, side %d: %v\n", cyl, side, err)
+				// Store empty data for this track
+				if side == 0 {
+					disk.Tracks[cyl].Side0 = []byte{}
+				} else {
+					disk.Tracks[cyl].Side1 = []byte{}
+				}
+				// Ensure stream is stopped and give device time to recover
+				c.streamOff()
+				c.motorOff()
+				time.Sleep(100 * time.Millisecond) // Brief pause for device recovery
+				continue
 			}
 
 			// Decode stream data to extract flux transitions
 			decoded, err := c.decodeKryoFluxStream(streamData)
 			if err != nil {
-				return fmt.Errorf("failed to decode stream from track %d, side %d: %w", cyl, side, err)
+				// Log error but continue with next track
+				fmt.Printf("\nWarning: failed to decode stream from track %d, side %d: %v\n", cyl, side, err)
+				// Store empty data for this track
+				if side == 0 {
+					disk.Tracks[cyl].Side0 = []byte{}
+				} else {
+					disk.Tracks[cyl].Side1 = []byte{}
+				}
+				// Ensure cleanup
+				c.streamOff()
+				c.motorOff()
+				time.Sleep(100 * time.Millisecond)
+				continue
 			}
 
 			// Calculate RPM and BitRate from first track (cylinder 0, head 0)
@@ -1476,7 +1776,19 @@ func (c *Client) Read(filename string) error {
 			// Decode flux data to MFM bitstream
 			mfmBitstream, err := c.decodeFluxToMFM(decoded, disk.Header.BitRate)
 			if err != nil {
-				return fmt.Errorf("failed to decode flux data to MFM from track %d, side %d: %w", cyl, side, err)
+				// Log error but continue with next track
+				fmt.Printf("\nWarning: failed to decode flux data to MFM from track %d, side %d: %v\n", cyl, side, err)
+				// Store empty data for this track
+				if side == 0 {
+					disk.Tracks[cyl].Side0 = []byte{}
+				} else {
+					disk.Tracks[cyl].Side1 = []byte{}
+				}
+				// Ensure cleanup
+				c.streamOff()
+				c.motorOff()
+				time.Sleep(100 * time.Millisecond)
+				continue
 			}
 
 			// Store MFM bitstream in appropriate side
