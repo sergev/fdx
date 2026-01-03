@@ -86,9 +86,13 @@ const (
 
 // PLL and MFM constants
 const (
-	MFM_NOMINAL_PERIOD_NS = 2000 // 250 kbps MFM: 1 bitcell = 2000ns
-	PLL_DAMPING           = 0.2  // Damping factor for PLL
-	PLL_WINDOW_TOLERANCE  = 0.25 // ±25% window tolerance
+	MFM_NOMINAL_PERIOD_NS = 2000 // 250 kbps MFM: 1 bitcell = 2000ns (kept for compatibility with calculateBitRateFromFlux)
+	// SCP PLL algorithm constants (from legacy/mfmdisk/scp.c)
+	// These are used by the new decodeFluxToMFM() implementation
+	CLOCK_CENTRE   = 2000 // 2000ns = 2us (nominal clock period)
+	CLOCK_MAX_ADJ  = 10   // +/- 10% adjustment range (90%-110% of CLOCK_CENTRE)
+	PERIOD_ADJ_PCT = 5    // Period adjustment percentage
+	PHASE_ADJ_PCT  = 60   // Phase adjustment percentage
 )
 
 // Bus type codes
@@ -545,10 +549,127 @@ func readN28(data []byte, offset int) (uint32, int, error) {
 	return value, 4, nil
 }
 
-// PLLState represents the state of the Phase-Locked Loop
+// PLLState represents the state of the Phase-Locked Loop (old implementation, kept for compatibility)
 type PLLState struct {
 	period float64 // Expected bitcell period in nanoseconds
 	phase  float64 // Current phase accumulator (0.0 to 1.0)
+}
+
+// pllState represents the state of the SCP-style Phase-Locked Loop
+// Based on pll_t from legacy/mfmdisk/scp.c
+type pllState struct {
+	clock        float64 // Current clock period in nanoseconds
+	flux         float64 // Accumulated flux time in nanoseconds
+	time         float64 // Total time elapsed in nanoseconds
+	clockedZeros int     // Count of consecutive clocked zeros
+}
+
+// fluxIterator provides flux intervals from absolute transition times
+// Similar to scp_next_flux() but works with pre-computed transition times
+type fluxIterator struct {
+	transitions []uint64 // Absolute transition times in nanoseconds
+	index       int      // Current index into transitions
+	lastTime    uint64   // Last transition time (for calculating intervals)
+}
+
+// nextFlux returns the next flux interval in nanoseconds (time until next transition)
+// Returns 0 if no more transitions available
+func (fi *fluxIterator) nextFlux() uint64 {
+	if fi.index >= len(fi.transitions) {
+		return 0 // No more transitions
+	}
+
+	nextTime := fi.transitions[fi.index]
+	interval := nextTime - fi.lastTime
+	fi.lastTime = nextTime
+	fi.index++
+	return interval
+}
+
+// pllInit initializes the PLL state
+// Based on pll_init() from legacy/mfmdisk/scp.c
+func pllInit(pll *pllState) {
+	pll.clock = float64(CLOCK_CENTRE)
+	pll.flux = 0
+	pll.time = 0
+	pll.clockedZeros = 0
+}
+
+// clockMin returns the minimum allowed clock period
+func clockMin(centre float64) float64 {
+	return (centre * (100 - CLOCK_MAX_ADJ)) / 100
+}
+
+// clockMax returns the maximum allowed clock period
+func clockMax(centre float64) float64 {
+	return (centre * (100 + CLOCK_MAX_ADJ)) / 100
+}
+
+// pllNextBit decodes and returns next bit from the flux input stream
+// Based on pll_next_bit() from legacy/mfmdisk/scp.c
+// Returns: 0 for clocked zero, 1 for transition detected
+func pllNextBit(pll *pllState, fi *fluxIterator) int {
+	// Accumulate flux until it exceeds clock/2
+	for pll.flux < pll.clock/2 {
+		fluxInterval := fi.nextFlux()
+		if fluxInterval == 0 {
+			// No more transitions, return 0 (clocked zero)
+			pll.clockedZeros++
+			return 0
+		}
+		pll.flux += float64(fluxInterval)
+	}
+
+	// Advance time by one clock period
+	pll.time += pll.clock
+	pll.flux -= pll.clock
+
+	// Check if we have a clocked zero (flux >= clock/2 after subtraction)
+	if pll.flux >= pll.clock/2 {
+		pll.clockedZeros++
+		return 0
+	}
+
+	// Transition detected - adjust PLL parameters
+	// PLL: Adjust clock frequency according to phase mismatch
+	if pll.clockedZeros <= 3 {
+		// In sync: adjust base clock by a fraction of phase mismatch
+		pll.clock += pll.flux * PERIOD_ADJ_PCT / 100
+	} else {
+		// Out of sync: adjust base clock towards centre
+		pll.clock += (float64(CLOCK_CENTRE) - pll.clock) * PERIOD_ADJ_PCT / 100
+	}
+
+	// Clamp the clock's adjustment range
+	if pll.clock < clockMin(float64(CLOCK_CENTRE)) {
+		pll.clock = clockMin(float64(CLOCK_CENTRE))
+	}
+	if pll.clock > clockMax(float64(CLOCK_CENTRE)) {
+		pll.clock = clockMax(float64(CLOCK_CENTRE))
+	}
+
+	// PLL: Adjust clock phase according to mismatch
+	// PHASE_ADJ_PCT=100% -> timing window snaps to observed flux
+	newFlux := pll.flux * (100 - PHASE_ADJ_PCT) / 100
+	pll.time += pll.flux - newFlux
+	pll.flux = newFlux
+
+	pll.clockedZeros = 0
+	return 1
+}
+
+// pllNextBitcell returns the next MFM bitcell (1 = transition, 0 = no transition)
+// This calls pllNextBit() twice internally to get two half-bits per bitcell
+// Based on the reference implementation which outputs half-bits
+// In MFM, a bitcell consists of two half-bits, and mfm_read_bit() returns the second half-bit
+func pllNextBitcell(pll *pllState, fi *fluxIterator) (int, bool) {
+	// Get two half-bits for one bitcell
+	_ = pllNextBit(pll, fi)         // First half-bit (not used for bitcell value)
+	halfbit2 := pllNextBit(pll, fi) // Second half-bit (this is the bitcell value)
+
+	// Based on mfm_read_bit() in the reference: it returns the second half-bit (b)
+	// So we return halfbit2 as the bitcell value
+	return halfbit2, fi.index < len(fi.transitions)
 }
 
 // absInt64 returns the absolute value of an int64
@@ -751,8 +872,10 @@ func (c *Client) calculateBitRateFromFlux(fluxData []byte) uint16 {
 		// Calculate phase error
 		phaseError := periods - float64(int(periods+0.5))
 
-		// Adjust period (with damping)
-		pllPeriod += PLL_DAMPING * phaseError * pllPeriod
+		// Adjust period (with damping) - using old PLL algorithm for bitrate calculation
+		// This is a different algorithm from the decodeFluxToMFM PLL, so we use a simple damping factor
+		const oldPLLDamping = 0.2
+		pllPeriod += oldPLLDamping * phaseError * pllPeriod
 
 		// Clamp period to reasonable range (±50% of nominal)
 		if pllPeriod < MFM_NOMINAL_PERIOD_NS*0.5 {
@@ -859,103 +982,42 @@ func (c *Client) decodeFluxToMFM(fluxData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("no flux transitions found")
 	}
 
-	// Step 2: Apply PLL to recover clock and generate bitcell boundaries
-	pll := PLLState{
-		period: MFM_NOMINAL_PERIOD_NS,
-		phase:  0.0,
+	// Step 2: Apply SCP-style PLL to recover clock and generate bitcell boundaries
+	// Create flux iterator from transition times
+	fi := &fluxIterator{
+		transitions: transitions,
+		index:       0,
+		lastTime:    0, // Start from time 0
 	}
+
+	// Initialize PLL
+	pll := &pllState{}
+	pllInit(pll)
+
+	// Ignore first half-bit (as done in reference implementation)
+	_ = pllNextBit(pll, fi)
 
 	var bitcells []bool // MFM bitcells: true = transition (1), false = no transition (0)
 
-	if len(transitions) < 2 {
-		return nil, fmt.Errorf("insufficient transitions for PLL lock")
-	}
-
-	// Initialize PLL with first few transitions
-	lastTransitionTime := transitions[0]
-
-	for i := 1; i < len(transitions) && i < 100; i++ {
-		deltaTime := float64(transitions[i] - lastTransitionTime)
-
-		// Calculate expected phase at this time
-		expectedPhase := pll.phase + (deltaTime / pll.period)
-
-		// Calculate phase error (how many periods this interval represents)
-		periods := deltaTime / pll.period
-		phaseError := periods - float64(int(periods+0.5))
-
-		// Adjust period
-		pll.period += PLL_DAMPING * phaseError * pll.period
-
-		// Clamp period to reasonable range (±50% of nominal)
-		if pll.period < MFM_NOMINAL_PERIOD_NS*0.5 {
-			pll.period = MFM_NOMINAL_PERIOD_NS * 0.5
-		}
-		if pll.period > MFM_NOMINAL_PERIOD_NS*1.5 {
-			pll.period = MFM_NOMINAL_PERIOD_NS * 1.5
-		}
-
-		pll.phase = expectedPhase - float64(int(expectedPhase))
-		lastTransitionTime = transitions[i]
-	}
-
-	// Step 3: Sample bitcells incrementally at regular intervals
-	// Start sampling from the first transition (or slightly before to capture it)
-	startTime := transitions[0]
-	if startTime > uint64(pll.period/4) {
-		// Start slightly before the first transition to ensure we capture it
-		startTime -= uint64(pll.period / 4)
-	}
-
-	// Determine the end time (use the last transition + some margin, or use index pulses if available)
-	endTime := transitions[len(transitions)-1] + uint64(pll.period*10) // Add margin after last transition
+	// Determine maximum bitcells to generate
+	// Use index pulses if available, otherwise use transition count as estimate
+	maxBitcells := 200000 // Limit to ~2 revolutions (safety limit)
 	if len(indexPulses) >= 2 {
-		// If we have multiple index pulses, sample until the second index pulse
-		endTime = indexPulses[1]
+		// Estimate bitcells from index pulse interval
+		revTime := float64(indexPulses[1] - indexPulses[0])
+		estimatedBitcells := int(revTime / float64(CLOCK_CENTRE) * 2) // *2 for half-bits
+		if estimatedBitcells > 0 && estimatedBitcells < maxBitcells {
+			maxBitcells = estimatedBitcells * 2 // Allow 2 revolutions
+		}
 	}
 
-	// Tolerance window for transition detection (25% of bitcell period)
-	tolerance := uint64(pll.period * PLL_WINDOW_TOLERANCE)
+	// Generate bitcells using PLL algorithm
+	for len(bitcells) < maxBitcells {
+		bitcell, hasMore := pllNextBitcell(pll, fi)
+		bitcells = append(bitcells, bitcell == 1)
 
-	// Sample at regular intervals (bitcell period)
-	sampleTime := startTime
-	transitionIdx := 0 // Index to speed up transition search (optimization: tracks first transition >= current window)
-
-	for sampleTime < endTime {
-		// Check if there's a transition within the tolerance window around this sample point
-		windowMin := sampleTime
-		if windowMin > tolerance {
-			windowMin -= tolerance
-		} else {
-			windowMin = 0
-		}
-		windowMax := sampleTime + tolerance
-
-		hasTransition := false
-
-		// Search for transitions in the window
-		// Skip transitions that are too early (optimization)
-		for transitionIdx < len(transitions) && transitions[transitionIdx] < windowMin {
-			transitionIdx++
-		}
-
-		// Check if any transition falls within the window
-		checkIdx := transitionIdx
-		for checkIdx < len(transitions) && transitions[checkIdx] <= windowMax {
-			hasTransition = true
-			break
-		}
-
-		// Store raw bitcell: 1 if transition found, 0 if not
-		bitcells = append(bitcells, hasTransition)
-
-		// Advance to next sample point
-		sampleTime += uint64(pll.period)
-
-		// Limit output size to prevent excessive memory usage
-		// Allow up to ~2 revolutions worth of bitcells (200,000 bitcells = 25,000 bytes)
-		// For 250 kbps: 100,000 bitcells/rev * 2 = 200,000 bitcells
-		if len(bitcells) > 200000 {
+		if !hasMore {
+			// No more transitions available
 			break
 		}
 	}
