@@ -1,3 +1,7 @@
+//
+// NOTE: This code is considered experimental.
+// Production use is not recommended due to unresolved stability issues.
+//
 package kryoflux
 
 import (
@@ -49,9 +53,8 @@ const (
 	ControlTimeout = 5 * time.Second // Timeout for USB control transfers (matches legacy C code)
 
 	// Stream reading constants
-	AsyncReadBufferSize  = 6400
-	AsyncReadBufferCount = 100
-	StreamOnValue        = 0x601
+	ReadBufferSize = 6400
+	StreamOnValue  = 0x601
 
 	// Default Sample Clock (Hz) - can be overridden by KFInfo blocks
 	DefaultSampleClock = 24027428.57142857
@@ -324,29 +327,10 @@ func (c *Client) controlIn(request byte, index uint16, silent bool) ([]byte, err
 }
 
 // controlInWithTimeout performs a control transfer IN request with a timeout
-// This wraps the USB control transfer to prevent hanging if the device doesn't respond
+// This is now just a wrapper that calls controlIn directly
+// USB control transfers should have OS-level timeouts
 func (c *Client) controlInWithTimeout(request byte, index uint16, silent bool) ([]byte, error) {
-	type result struct {
-		data []byte
-		err  error
-	}
-
-	// Channel to receive the result from the goroutine
-	resultChan := make(chan result, 1)
-
-	// Execute control transfer in a goroutine
-	go func() {
-		data, err := c.controlIn(request, index, silent)
-		resultChan <- result{data: data, err: err}
-	}()
-
-	// Wait for either completion or timeout
-	select {
-	case res := <-resultChan:
-		return res.data, res.err
-	case <-time.After(ControlTimeout):
-		return nil, fmt.Errorf("control transfer timeout after %v", ControlTimeout)
-	}
+	return c.controlIn(request, index, silent)
 }
 
 // checkFirmwarePresent checks if firmware is present by querying REQUEST_STATUS
@@ -582,38 +566,19 @@ func (c *Client) configure(device, density, minTrack, maxTrack int) error {
 
 // motorOn turns on the motor and positions the head at the specified side and track
 func (c *Client) motorOn(side, track int) error {
-	// Use timeout wrapper to prevent blocking
-	type result struct {
-		data []byte
-		err  error
+	_, err := c.controlIn(RequestMotor, 1, false)
+	if err != nil {
+		return fmt.Errorf("failed to turn motor on: %w", err)
 	}
-	resultChan := make(chan result, 1)
-
-	go func() {
-		_, err := c.controlIn(RequestMotor, 1, false)
-		if err != nil {
-			resultChan <- result{nil, fmt.Errorf("failed to turn motor on: %w", err)}
-			return
-		}
-		_, err = c.controlIn(RequestSide, uint16(side), false)
-		if err != nil {
-			resultChan <- result{nil, fmt.Errorf("failed to set side: %w", err)}
-			return
-		}
-		_, err = c.controlIn(RequestTrack, uint16(track), false)
-		if err != nil {
-			resultChan <- result{nil, fmt.Errorf("failed to set track: %w", err)}
-			return
-		}
-		resultChan <- result{nil, nil}
-	}()
-
-	select {
-	case res := <-resultChan:
-		return res.err
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("motorOn timeout after 5 seconds")
+	_, err = c.controlIn(RequestSide, uint16(side), false)
+	if err != nil {
+		return fmt.Errorf("failed to set side: %w", err)
 	}
+	_, err = c.controlIn(RequestTrack, uint16(track), false)
+	if err != nil {
+		return fmt.Errorf("failed to set track: %w", err)
+	}
+	return nil
 }
 
 // motorOff turns off the motor
@@ -860,138 +825,78 @@ func (c *Client) captureStream(file *os.File) error {
 		firstOOBSeen: false,
 	}
 
-	// Channel for reading data
-	dataChan := make(chan []byte, AsyncReadBufferCount)
-	errChan := make(chan error, 1)
-	doneChan := make(chan bool, 1)
-	readDoneChan := make(chan bool, 1)
-	streamStarted := false
-
-	// Start async read in goroutine
-	go func() {
-		defer func() {
-			readDoneChan <- true
-		}()
-		buf := make([]byte, AsyncReadBufferSize)
-		for {
-			select {
-			case <-doneChan:
-				return
-			default:
-				length, err := c.bulkIn.Read(buf)
-				if err != nil {
-					// Check if we're done - if so, don't report the error
-					select {
-					case <-doneChan:
-						return
-					default:
-						// If stream completed successfully, EOF/error might be expected
-						if state.complete {
-							return
-						}
-						errChan <- err
-						return
-					}
-				}
-				if length == 0 {
-					continue
-				}
-				data := make([]byte, length)
-				copy(data, buf[:length])
-				select {
-				case dataChan <- data:
-				case <-doneChan:
-					return
-				}
-			}
-		}
-	}()
-
 	// Start stream
 	err := c.streamOn()
 	if err != nil {
-		doneChan <- true
-		<-readDoneChan // Wait for goroutine to finish
 		return fmt.Errorf("failed to start stream: %w", err)
 	}
-	streamStarted = true
+	streamStarted := true
+	defer func() {
+		// Stop stream if we started it
+		if streamStarted {
+			c.controlIn(RequestStream, 0, true)
+		}
+	}()
 
-	// Process incoming data
-	processing := true
-	for processing {
-		select {
-		case data := <-dataChan:
-			// Validate the data first
-			shouldContinue := c.validateStreamData(state, data)
-			// Write the data if validation passed (even if stream is now complete)
-			if !state.failed {
-				_, err := file.Write(data)
-				if err != nil {
-					doneChan <- true
-					<-readDoneChan // Wait for goroutine to finish
-					// Try to stop stream silently if it was started
-					if streamStarted {
-						c.controlIn(RequestStream, 0, true)
-					}
-					return fmt.Errorf("failed to write stream data: %w", err)
-				}
-			}
-			// Stop processing if validation says to stop or if stream completed/failed
-			if !shouldContinue || state.complete || state.failed {
-				processing = false
-			}
-		case err := <-errChan:
-			// If stream is complete, the error might be expected (device stopped sending)
+	// Read buffer
+	buf := make([]byte, ReadBufferSize)
+	maxTotalTime := 30 * time.Second
+	startTime := time.Now()
+	lastDataTime := time.Now()
+	noDataTimeout := 5 * time.Second
+
+	// Process incoming data synchronously
+	for !state.complete && !state.failed {
+		// Check for overall timeout
+		if time.Since(startTime) > maxTotalTime {
+			return fmt.Errorf("stream read timeout: maximum time %v exceeded", maxTotalTime)
+		}
+
+		// Check for no data timeout
+		if time.Since(lastDataTime) > noDataTimeout {
+			// If we have some data and stream is complete, that's okay
 			if state.complete {
-				processing = false
 				break
 			}
-			doneChan <- true
-			<-readDoneChan // Wait for goroutine to finish
-			// Try to stop stream silently if it was started
-			if streamStarted {
-				c.controlIn(RequestStream, 0, true)
+			return fmt.Errorf("stream read timeout: no data received within %v", noDataTimeout)
+		}
+
+		// Read data synchronously
+		length, err := c.bulkIn.Read(buf)
+		if err != nil {
+			// If stream completed successfully, EOF/error might be expected
+			if state.complete {
+				break
 			}
 			return fmt.Errorf("failed to read stream data: %w", err)
-		case <-time.After(30 * time.Second):
-			// Timeout after 30 seconds
-			doneChan <- true
-			<-readDoneChan // Wait for goroutine to finish
-			// Try to stop stream silently if it was started
-			if streamStarted {
-				c.controlIn(RequestStream, 0, true)
-			}
-			return fmt.Errorf("stream read timeout")
 		}
-	}
 
-	// Drain any remaining data from channel
-	draining := true
-	for draining {
-		select {
-		case data := <-dataChan:
-			// Validate and write remaining data
-			c.validateStreamData(state, data)
-			if !state.failed {
-				file.Write(data)
-			}
-		default:
-			draining = false
+		if length == 0 {
+			// No data, but continue
+			continue
 		}
-	}
 
-	// Signal goroutine to stop and wait for it to finish
-	doneChan <- true
-	<-readDoneChan
+		// Update last data time
+		lastDataTime = time.Now()
 
-	// Stop stream only if we started it successfully
-	if streamStarted {
-		// Use silent mode to avoid errors if device is already stopped or in error state
-		_, err = c.controlIn(RequestStream, 0, true)
-		if err != nil {
-			// Don't fail if stream is already stopped or device doesn't respond
-			// This can happen if the device is in an error state or stream already ended
-			// Log but don't return error
+		// Copy data
+		data := make([]byte, length)
+		copy(data, buf[:length])
+
+		// Validate the data
+		shouldContinue := c.validateStreamData(state, data)
+
+		// Write the data if validation passed (even if stream is now complete)
+		if !state.failed {
+			_, err := file.Write(data)
+			if err != nil {
+				return fmt.Errorf("failed to write stream data: %w", err)
+			}
+		}
+
+		// Stop processing if validation says to stop or if stream completed/failed
+		if !shouldContinue || state.complete || state.failed {
+			break
 		}
 	}
 
@@ -1021,219 +926,90 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 
 	var streamData []byte
 
-	// Channel for reading data
-	dataChan := make(chan []byte, AsyncReadBufferCount)
-	errChan := make(chan error, 1)
-	doneChan := make(chan bool, 1)
-	readDoneChan := make(chan bool, 1)
-	streamStarted := false
-
-	// Start async read in goroutine
-	// Use a timeout for each read operation to prevent indefinite blocking
-	readTimeout := 3 * time.Second // Increased slightly to reduce false timeouts
-	go func() {
-		defer func() {
-			readDoneChan <- true
-		}()
-		buf := make([]byte, AsyncReadBufferSize)
-		for {
-			select {
-			case <-doneChan:
-				return
-			default:
-				// Wrap read in timeout
-				type readResult struct {
-					length int
-					err    error
-				}
-				readResultChan := make(chan readResult, 1)
-				go func() {
-					length, err := c.bulkIn.Read(buf)
-					readResultChan <- readResult{length: length, err: err}
-				}()
-
-				var length int
-				var err error
-				select {
-				case <-doneChan:
-					return
-				case res := <-readResultChan:
-					length, err = res.length, res.err
-				case <-time.After(readTimeout):
-					// Read timeout - check if we should continue or abort
-					select {
-					case <-doneChan:
-						return
-					default:
-						// If stream is complete, this is expected - return
-						if state.complete {
-							return
-						}
-						// Otherwise, send timeout error
-						errChan <- fmt.Errorf("bulk read timeout after %v", readTimeout)
-						return
-					}
-				}
-
-				if err != nil {
-					select {
-					case <-doneChan:
-						return
-					default:
-						if state.complete {
-							return
-						}
-						errChan <- err
-						return
-					}
-				}
-				if length == 0 {
-					continue
-				}
-				data := make([]byte, length)
-				copy(data, buf[:length])
-				select {
-				case dataChan <- data:
-				case <-doneChan:
-					return
-				}
-			}
-		}
-	}()
-
 	// Start stream
 	err := c.streamOn()
 	if err != nil {
-		doneChan <- true
-		<-readDoneChan
 		return nil, fmt.Errorf("failed to start stream: %w", err)
 	}
-	streamStarted = true
+	streamStarted := true
+	defer func() {
+		// Stop stream if we started it
+		if streamStarted {
+			c.controlIn(RequestStream, 0, true)
+		}
+	}()
 
-	// Process incoming data
-	processing := true
+	// Read buffer
+	buf := make([]byte, ReadBufferSize)
+	maxTotalTime := 30 * time.Second // Absolute maximum time for stream capture
+	noDataTimeout := 5 * time.Second // Timeout if no data received for this duration
+	startTime := time.Now()
+	lastDataTime := time.Now()
 	dataReceived := false
-	maxTotalTime := 30 * time.Second // Absolute maximum time for stream capture (reduced from 60s)
-	noDataTimeout := 5 * time.Second // Timeout if no data received for this duration (reduced from 10s)
-	processingIterations := 0
 
-	intervalTimeout := time.NewTimer(noDataTimeout)
-	defer intervalTimeout.Stop()
-	totalTimeout := time.NewTimer(maxTotalTime)
-	defer totalTimeout.Stop()
-
-	for processing {
-		processingIterations++
-		select {
-		case data := <-dataChan:
-			dataReceived = true
-			// Reset interval timeout since we received data
-			if !intervalTimeout.Stop() {
-				<-intervalTimeout.C
-			}
-			intervalTimeout.Reset(noDataTimeout)
-			// Validate the data first
-			shouldContinue := c.validateStreamData(state, data)
-			// Append the data if validation passed
-			if !state.failed {
-				streamData = append(streamData, data...)
-			}
-			// Stop processing if validation says to stop or if stream completed/failed
-			if !shouldContinue || state.complete || state.failed {
-				processing = false
-			}
-		case err := <-errChan:
-			if state.complete {
-				processing = false
-				break
-			}
-			// Immediately stop stream and don't wait for goroutine
-			doneChan <- true
-			if streamStarted {
-				c.controlIn(RequestStream, 0, true)
-			}
-			// Try to read from readDoneChan with timeout
-			select {
-			case <-readDoneChan:
-			case <-time.After(100 * time.Millisecond):
-				// Goroutine didn't exit, continue anyway
-			}
-			return nil, fmt.Errorf("failed to read stream data: %w", err)
-		case <-intervalTimeout.C:
-			// No data received for intervalTimeout duration - timeout
-			// Stop stream and exit - don't try to continue
-			doneChan <- true
-			if streamStarted {
-				c.controlIn(RequestStream, 0, true)
-				streamStarted = false
-			}
-
-			// Don't wait indefinitely for goroutine - it might be stuck in a blocking read
-			select {
-			case <-readDoneChan:
-			case <-time.After(200 * time.Millisecond):
-				// Goroutine didn't exit in time - might be stuck, but we continue anyway
-			}
-
+	// Process incoming data synchronously
+	for !state.complete && !state.failed {
+		// Check for overall timeout
+		if time.Since(startTime) > maxTotalTime {
 			// If we have some data, return it anyway - might be a partial stream
-			if len(streamData) > 0 {
-				return streamData, nil
-			}
-
-			// No data received at all
-			if !dataReceived {
-				return nil, fmt.Errorf("stream read timeout: no data received within %v", noDataTimeout)
-			}
-
-			// We received data before but now timed out - return what we have
-			return streamData, nil
-		case <-totalTimeout.C:
-			// Absolute maximum time exceeded - timeout
-			doneChan <- true
-			if streamStarted {
-				c.controlIn(RequestStream, 0, true)
-				streamStarted = false
-			}
-			// Don't wait indefinitely for goroutine
-			select {
-			case <-readDoneChan:
-			case <-time.After(200 * time.Millisecond):
-			}
 			if len(streamData) > 0 {
 				return streamData, nil
 			}
 			return nil, fmt.Errorf("stream read timeout: maximum time %v exceeded", maxTotalTime)
 		}
-	}
 
-	// Drain any remaining data from channel
-	draining := true
-	for draining {
-		select {
-		case data := <-dataChan:
-			c.validateStreamData(state, data)
-			if !state.failed {
-				streamData = append(streamData, data...)
+		// Check for no data timeout
+		if time.Since(lastDataTime) > noDataTimeout {
+			// If stream is complete, that's okay
+			if state.complete {
+				break
 			}
-		default:
-			draining = false
+			// If we have some data, return it anyway - might be a partial stream
+			if len(streamData) > 0 {
+				return streamData, nil
+			}
+			// No data received at all
+			if !dataReceived {
+				return nil, fmt.Errorf("stream read timeout: no data received within %v", noDataTimeout)
+			}
+			// We received data before but now timed out - return what we have
+			return streamData, nil
 		}
-	}
 
-	// Signal goroutine to stop and wait for it to finish (with timeout)
-	doneChan <- true
-	select {
-	case <-readDoneChan:
-		// Goroutine exited normally
-	case <-time.After(500 * time.Millisecond):
-		// Goroutine didn't exit in time - might be stuck, but continue anyway
-	}
-
-	// Stop stream only if we started it successfully
-	if streamStarted {
-		_, err = c.controlIn(RequestStream, 0, true)
+		// Read data synchronously
+		length, err := c.bulkIn.Read(buf)
 		if err != nil {
-			// Log but don't return error
+			// If stream completed successfully, EOF/error might be expected
+			if state.complete {
+				break
+			}
+			return nil, fmt.Errorf("failed to read stream data: %w", err)
+		}
+
+		if length == 0 {
+			// No data, but continue
+			continue
+		}
+
+		// Update timing
+		dataReceived = true
+		lastDataTime = time.Now()
+
+		// Copy data
+		data := make([]byte, length)
+		copy(data, buf[:length])
+
+		// Validate the data
+		shouldContinue := c.validateStreamData(state, data)
+
+		// Append the data if validation passed
+		if !state.failed {
+			streamData = append(streamData, data...)
+		}
+
+		// Stop processing if validation says to stop or if stream completed/failed
+		if !shouldContinue || state.complete || state.failed {
+			break
 		}
 	}
 
