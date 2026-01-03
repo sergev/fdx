@@ -9,6 +9,7 @@ import (
 
 	"floppy/adapter"
 	"floppy/hfe"
+	"floppy/pll"
 
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
@@ -82,15 +83,6 @@ var ErrBadPin = errors.New("pin not supported")
 const (
 	FLUXOP_INDEX = 1
 	FLUXOP_SPACE = 2
-)
-
-// PLL and MFM constants
-const (
-	// SCP PLL algorithm constants (from legacy/mfmdisk/scp.c)
-	// These are used by the new decodeFluxToMFM() implementation
-	CLOCK_MAX_ADJ  = 10 // +/- 10% adjustment range (90%-110% of CLOCK_CENTRE)
-	PERIOD_ADJ_PCT = 5  // Period adjustment percentage
-	PHASE_ADJ_PCT  = 60 // Phase adjustment percentage
 )
 
 // Bus type codes
@@ -547,27 +539,19 @@ func readN28(data []byte, offset int) (uint32, int, error) {
 	return value, 4, nil
 }
 
-// pllState represents the state of the SCP-style Phase-Locked Loop
-// Based on pll_t from legacy/mfmdisk/scp.c
-type pllState struct {
-	periodIdeal  float64 // Expected clock period in nanoseconds
-	period       float64 // Current clock period in nanoseconds
-	flux         float64 // Accumulated flux time in nanoseconds
-	time         float64 // Total time elapsed in nanoseconds
-	clockedZeros int     // Count of consecutive clocked zeros
-}
-
 // fluxIterator provides flux intervals from absolute transition times
 // Similar to scp_next_flux() but works with pre-computed transition times
+// It implements pll.FluxSource interface
 type fluxIterator struct {
 	transitions []uint64 // Absolute transition times in nanoseconds
 	index       int      // Current index into transitions
 	lastTime    uint64   // Last transition time (for calculating intervals)
 }
 
-// nextFlux returns the next flux interval in nanoseconds (time until next transition)
+// NextFlux returns the next flux interval in nanoseconds (time until next transition)
 // Returns 0 if no more transitions available
-func (fi *fluxIterator) nextFlux() uint64 {
+// Implements pll.FluxSource interface
+func (fi *fluxIterator) NextFlux() uint64 {
 	if fi.index >= len(fi.transitions) {
 		return 0 // No more transitions
 	}
@@ -577,85 +561,6 @@ func (fi *fluxIterator) nextFlux() uint64 {
 	fi.lastTime = nextTime
 	fi.index++
 	return interval
-}
-
-// pllInit initializes the PLL state
-// Based on pll_init() from legacy/mfmdisk/scp.c
-func pllInit(pll *pllState, bitRateKhz uint16) {
-	pll.periodIdeal = 1e6 / float64(bitRateKhz) / 2
-	pll.period = pll.periodIdeal
-	pll.flux = 0
-	pll.time = 0
-	pll.clockedZeros = 0
-}
-
-// pllNextBit decodes and returns next bit from the flux input stream
-// Based on pll_next_bit() from legacy/mfmdisk/scp.c
-// Returns: 0 for clocked zero, 1 for transition detected
-func pllNextBit(pll *pllState, fi *fluxIterator) bool {
-	//fmt.Printf("--- pllNextBit() period = %.0f, time = %.0f, flux = %.0f, periodIdeal = %.0f\n", pll.period, pll.time, pll.flux, pll.periodIdeal)
-
-	// Accumulate flux until it exceeds period/2
-	for pll.flux < pll.period/2 {
-		fluxInterval := fi.nextFlux()
-		if fluxInterval == 0 {
-			// No more transitions, return 0 (clocked zero)
-			pll.clockedZeros++
-			//fmt.Printf("---     No more transitions, clockedZeros = %d\n", pll.clockedZeros)
-			return false // 0
-		}
-		pll.flux += float64(fluxInterval)
-		//fmt.Printf("---     increment flux = %.0f\n", pll.flux)
-	}
-
-	// Advance time by one clock period
-	pll.time += pll.period
-	pll.flux -= pll.period
-	//fmt.Printf("---     advance time = %.0f, flux = %.0f\n", pll.time, pll.flux)
-
-	// Check if we have a clocked zero (flux >= period/2 after subtraction)
-	if pll.flux >= pll.period/2 {
-		pll.clockedZeros++
-		//fmt.Printf("---     return 0, clockedZeros = %d\n", pll.clockedZeros)
-		return false // 0
-	}
-
-	// Transition detected - adjust PLL parameters
-	// PLL: Adjust clock period according to phase mismatch
-	if pll.clockedZeros <= 3 {
-		// In sync: adjust base clock by a fraction of phase mismatch
-		pll.period += pll.flux * PERIOD_ADJ_PCT / 100
-		//fmt.Printf("---     in sync: adjust period = %.0f\n", pll.period)
-	} else {
-		// Out of sync: adjust base clock towards centre
-		pll.period += (pll.periodIdeal - pll.period) * PERIOD_ADJ_PCT / 100
-		//fmt.Printf("---     out of sync: normalize period = %.0f\n", pll.period)
-	}
-
-	// Clamp the period adjustment range
-	// the minimum allowed clock period
-	pMin := (pll.periodIdeal * (100 - CLOCK_MAX_ADJ)) / 100
-	if pll.period < pMin {
-		pll.period = pMin
-		//fmt.Printf("---     clamp to min: period = %.0f\n", pll.period)
-	}
-
-	// the maximum allowed clock period
-	pMax := (pll.periodIdeal * (100 + CLOCK_MAX_ADJ)) / 100
-	if pll.period > pMax {
-		pll.period = pMax
-		//fmt.Printf("---     clamp to max: period = %.0f\n", pll.period)
-	}
-
-	// PLL: Adjust clock phase according to mismatch
-	// PHASE_ADJ_PCT=100% -> timing window snaps to observed flux
-	newFlux := pll.flux * (100 - PHASE_ADJ_PCT) / 100
-	pll.time += pll.flux - newFlux
-	pll.flux = newFlux
-	//fmt.Printf("---     adjust phase: newFlux = %.0f, time = %.0f, flux = %.0f\n", newFlux, pll.time, pll.flux)
-
-	pll.clockedZeros = 0
-	return true // 1
 }
 
 // Extract index pulse timings from flux data.
@@ -862,17 +767,17 @@ func (c *Client) decodeFluxToMFM(fluxData []byte, bitRateKhz uint16) ([]byte, er
 	}
 
 	// Initialize PLL
-	pll := &pllState{}
-	pllInit(pll, bitRateKhz)
+	pllState := &pll.State{}
+	pll.Init(pllState, bitRateKhz)
 
 	// Ignore first half-bit (as done in reference implementation)
-	_ = pllNextBit(pll, fi)
+	_ = pll.NextBit(pllState, fi)
 
 	// Generate MFM bitcells using PLL algorithm
 	var bitcells []bool
 	for {
-		first := pllNextBit(pll, fi)
-		second := pllNextBit(pll, fi)
+		first := pll.NextBit(pllState, fi)
+		second := pll.NextBit(pllState, fi)
 
 		bitcells = append(bitcells, first)
 		bitcells = append(bitcells, second)
