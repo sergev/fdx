@@ -1,3 +1,4 @@
 floppy
 floppy-tool
 *.raw
+.cursor

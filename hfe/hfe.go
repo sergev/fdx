@@ -229,17 +229,17 @@ func readTrack(file *os.File, th *TrackHeader, numSides uint8) (*TrackData, erro
 		return nil, fmt.Errorf("failed to read track data: %w", err)
 	}
 
-	// Reverse bits (HFE uses LSB-first, we use MSB-first)
-	bitReverseBlock(trackBuf)
-
 	// Demux sides: side 0 is bytes 0-255, side 1 is bytes 256-511 of each 512-byte block
+	// Apply byteBitsInverter during demuxing (convert from LSB-first to MSB-first)
 	side0Data := make([]byte, trackLen/2)
 	side1Data := make([]byte, trackLen/2)
 
 	for j := 0; j < trackLen; j += BlockSize {
-		copy(side0Data[j/2:], trackBuf[j:j+256])
-		if numSides > 1 {
-			copy(side1Data[j/2:], trackBuf[j+256:j+512])
+		for k := 0; k < 256; k++ {
+			side0Data[j/2+k] = byteBitsInverter[trackBuf[j+k]]
+			if numSides > 1 {
+				side1Data[j/2+k] = byteBitsInverter[trackBuf[j+256+k]]
+			}
 		}
 	}
 
@@ -334,7 +334,15 @@ func processOpcodes(data []byte) ([]byte, error) {
 			}
 		} else {
 			// Regular data byte - copy 8 bits
-			bitCopy(newData, outBit, data, inBit, 8)
+			// Check if this byte was escaped (XORed with 0x90 during encoding)
+			// Bytes in 0x60-0x6F range might be escaped opcodes (0xF0-0xFF XOR 0x90)
+			dataByte := data[inBit/8]
+			// XOR-back if in the escaped range (0x60-0x6F)
+			// This recovers bytes that were in 0xF0-0xFF range (except 0xF4)
+			if dataByte >= 0x60 && dataByte <= 0x6F {
+				dataByte ^= 0x90
+			}
+			bitCopy(newData, outBit, []byte{dataByte}, 0, 8)
 			inBit += 8
 			outBit += 8
 		}
@@ -411,19 +419,34 @@ func Write(filename string, disk *Disk) error {
 
 	trackPos := uint16(header.TrackListOffset + 1) // Start after track list block
 
-	// First pass: calculate track offsets
-	trackHeaders := make([]TrackHeader, len(disk.Tracks))
+	// First pass: encode all tracks and calculate exact encoded lengths
+	// This matches the legacy implementation which encodes first, then calculates lengths
+	type encodedTrack struct {
+		side0 []byte
+		side1 []byte
+	}
+	encodedTracks := make([]encodedTrack, len(disk.Tracks))
+	bitrateKbps := disk.Header.BitRate
 	for i, track := range disk.Tracks {
-		// Calculate track length in bits (max of both sides)
-		side0Bits := len(track.Side0) * 8
-		side1Bits := len(track.Side1) * 8
-		maxBits := side0Bits
-		if side1Bits > maxBits {
-			maxBits = side1Bits
+		encodedTracks[i].side0 = encodeOpcodes(track.Side0, bitrateKbps)
+		if disk.Header.NumberOfSide > 1 {
+			encodedTracks[i].side1 = encodeOpcodes(track.Side1, bitrateKbps)
+		} else {
+			encodedTracks[i].side1 = encodedTracks[i].side0
+		}
+	}
+
+	// Second pass: calculate track offsets using exact encoded lengths
+	trackHeaders := make([]TrackHeader, len(disk.Tracks))
+	for i := range encodedTracks {
+		// Calculate maximum encoded length (max of both sides)
+		maxEncodedLen := len(encodedTracks[i].side0)
+		if len(encodedTracks[i].side1) > maxEncodedLen {
+			maxEncodedLen = len(encodedTracks[i].side1)
 		}
 
-		// Track length is for both sides: bytelen = ((bitlen + 7) / 8) * 2
-		bytelen := ((maxBits + 7) / 8) * 2
+		// Track length is for both sides: bytelen = maxEncodedLen * 2
+		bytelen := maxEncodedLen * 2
 
 		// Round up to 512-byte boundary
 		trackLen := bytelen
@@ -456,9 +479,9 @@ func Write(filename string, disk *Disk) error {
 		return fmt.Errorf("failed to write track list: %w", err)
 	}
 
-	// Write track data
-	for i, track := range disk.Tracks {
-		if err := writeTrack(file, &trackHeaders[i], &track, disk.Header.NumberOfSide); err != nil {
+	// Write track data using pre-encoded tracks
+	for i := range encodedTracks {
+		if err := writeEncodedTrack(file, &trackHeaders[i], encodedTracks[i].side0, encodedTracks[i].side1, disk.Header.NumberOfSide); err != nil {
 			return fmt.Errorf("failed to write track %d: %w", i, err)
 		}
 	}
@@ -466,38 +489,87 @@ func Write(filename string, disk *Disk) error {
 	return nil
 }
 
-// writeTrack writes a single track to the file
-func writeTrack(file *os.File, th *TrackHeader, track *TrackData, numSides uint8) error {
-	// Calculate track length in bits
-	side0Bits := len(track.Side0) * 8
-	side1Bits := len(track.Side1) * 8
-	maxBits := side0Bits
-	if side1Bits > maxBits {
-		maxBits = side1Bits
+// encodeOpcodes encodes raw MFM bitstream data with HFEv3 opcodes
+// For uniform bitrate tracks, it inserts SETBITRATE and SETINDEX at the start and escapes
+// bytes in the opcode range (0xF0-0xFF, except RAND_OPCODE 0xF4) by XORing with 0x90
+// bitrateKbps: bitrate value in kbps from header (e.g., 250, 500, 1000)
+// The bitrate is converted to a code byte using: code = floor(FLOPPYEMUFREQ / (bitrate_bps * 2))
+// Where bitrate_bps = bitrateKbps * 1000
+func encodeOpcodes(data []byte, bitrateKbps uint16) []byte {
+	// Allocate output buffer (worst case: all bytes need escaping + SETBITRATE + SETINDEX)
+	result := make([]byte, 0, len(data)+3)
+
+	// Convert bitrate from kbps to code byte
+	// Formula: code = floor(FLOPPYEMUFREQ / (bitrate_kbps * 1000 * 2))
+	// Simplified: code = floor(18000 / bitrate_kbps)
+	// This matches the legacy implementation in hfev3_trackgen.c line 393
+	bitrateBps := float64(bitrateKbps) * 1000.0
+	timeBase := float64(FLOPPYEMUFREQ) / (bitrateBps * 2.0)
+	bitrateCode := byte(timeBase)
+	if bitrateCode == 0 && bitrateKbps > 0 {
+		// Ensure non-zero code (minimum 1)
+		bitrateCode = 1
 	}
 
-	// Calculate byte length for both sides: bytelen = ((bitlen + 7) / 8) * 2
-	bytelen := ((maxBits + 7) / 8) * 2
+	// Insert SETBITRATE opcode at the start (required by HFEv3 format)
+	// Format: SETBITRATE_OPCODE (0xF2) followed by bitrate code byte
+	result = append(result, SETBITRATE_OPCODE)
+	result = append(result, bitrateCode)
 
-	// Round up to 512-byte boundary
-	trackLen := bytelen
-	if trackLen%BlockSize != 0 {
-		trackLen = ((trackLen / BlockSize) + 1) * BlockSize
+	// Insert SETINDEX opcode (marks index position)
+	result = append(result, SETINDEX_OPCODE)
+
+	// Process each data byte
+	for _, b := range data {
+		// Escape bytes in opcode range (0xF0-0xFF) except RAND_OPCODE (0xF4)
+		// by XORing with 0x90 (per adjustrand function in legacy code)
+		if (b&OPCODE_MASK) == OPCODE_MASK && b != RAND_OPCODE {
+			// Escape by XORing with 0x90
+			result = append(result, b^0x90)
+		} else {
+			// Write byte as-is
+			result = append(result, b)
+		}
 	}
 
-	// Prepare track buffer
-	trackBuf := make([]byte, trackLen)
+	return result
+}
 
-	// Write side 0 and side 1 data, interleaved in 512-byte blocks
+// writeEncodedTrack writes pre-encoded track data to the file
+func writeEncodedTrack(file *os.File, th *TrackHeader, encodedSide0, encodedSide1 []byte, numSides uint8) error {
+	trackLen := int(th.TrackLen)
+
+	// Allocate buffers for each side (padded to trackLen/2)
+	side0Buf := make([]byte, trackLen/2)
+	side1Buf := make([]byte, trackLen/2)
+
+	// Copy encoded data and pad with NOP opcodes
+	copy(side0Buf, encodedSide0)
+	for i := len(encodedSide0); i < len(side0Buf); i++ {
+		side0Buf[i] = NOP_OPCODE
+	}
+
+	if numSides > 1 {
+		copy(side1Buf, encodedSide1)
+		for i := len(encodedSide1); i < len(side1Buf); i++ {
+			side1Buf[i] = NOP_OPCODE
+		}
+	} else {
+		copy(side1Buf, side0Buf)
+	}
+
+	// Interleave side0 and side1 data into track buffer
 	// Side 0: bytes 0-255 of each 512-byte block
 	// Side 1: bytes 256-511 of each 512-byte block
-	writeBits(track.Side0, trackBuf, 0, trackLen/2)
-	if numSides > 1 {
-		writeBits(track.Side1, trackBuf, 256, trackLen/2)
+	trackBuf := make([]byte, trackLen)
+	for k := 0; k < trackLen/BlockSize; k++ {
+		for j := 0; j < 256; j++ {
+			// Head 0
+			trackBuf[k*BlockSize+j] = byteBitsInverter[side0Buf[k*256+j]]
+			// Head 1
+			trackBuf[k*BlockSize+j+256] = byteBitsInverter[side1Buf[k*256+j]]
+		}
 	}
-
-	// Apply bit reversal (convert from MSB-first to LSB-first)
-	bitReverseBlock(trackBuf)
 
 	// Write to file
 	if _, err := file.Write(trackBuf); err != nil {
