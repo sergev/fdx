@@ -17,7 +17,7 @@ var readCmd = &cobra.Command{
 		}
 
 		// Determine output filename
-		filename := "image.raw"
+		filename := "image.hfe"
 		if len(args) > 0 {
 			filename = args[0]
 		}

@@ -88,9 +88,9 @@ const (
 const (
 	// SCP PLL algorithm constants (from legacy/mfmdisk/scp.c)
 	// These are used by the new decodeFluxToMFM() implementation
-	CLOCK_MAX_ADJ  = 10   // +/- 10% adjustment range (90%-110% of CLOCK_CENTRE)
-	PERIOD_ADJ_PCT = 5    // Period adjustment percentage
-	PHASE_ADJ_PCT  = 60   // Phase adjustment percentage
+	CLOCK_MAX_ADJ  = 10 // +/- 10% adjustment range (90%-110% of CLOCK_CENTRE)
+	PERIOD_ADJ_PCT = 5  // Period adjustment percentage
+	PHASE_ADJ_PCT  = 60 // Phase adjustment percentage
 )
 
 // Bus type codes
@@ -593,24 +593,30 @@ func pllInit(pll *pllState, bitRateKhz uint16) {
 // Based on pll_next_bit() from legacy/mfmdisk/scp.c
 // Returns: 0 for clocked zero, 1 for transition detected
 func pllNextBit(pll *pllState, fi *fluxIterator) bool {
+	//fmt.Printf("--- pllNextBit() period = %.0f, time = %.0f, flux = %.0f, periodIdeal = %.0f\n", pll.period, pll.time, pll.flux, pll.periodIdeal)
+
 	// Accumulate flux until it exceeds period/2
-	for pll.flux < pll.period / 2 {
+	for pll.flux < pll.period/2 {
 		fluxInterval := fi.nextFlux()
 		if fluxInterval == 0 {
 			// No more transitions, return 0 (clocked zero)
 			pll.clockedZeros++
+			//fmt.Printf("---     No more transitions, clockedZeros = %d\n", pll.clockedZeros)
 			return false // 0
 		}
 		pll.flux += float64(fluxInterval)
+		//fmt.Printf("---     increment flux = %.0f\n", pll.flux)
 	}
 
 	// Advance time by one clock period
 	pll.time += pll.period
 	pll.flux -= pll.period
+	//fmt.Printf("---     advance time = %.0f, flux = %.0f\n", pll.time, pll.flux)
 
 	// Check if we have a clocked zero (flux >= period/2 after subtraction)
-	if pll.flux >= pll.period / 2 {
+	if pll.flux >= pll.period/2 {
 		pll.clockedZeros++
+		//fmt.Printf("---     return 0, clockedZeros = %d\n", pll.clockedZeros)
 		return false // 0
 	}
 
@@ -619,22 +625,26 @@ func pllNextBit(pll *pllState, fi *fluxIterator) bool {
 	if pll.clockedZeros <= 3 {
 		// In sync: adjust base clock by a fraction of phase mismatch
 		pll.period += pll.flux * PERIOD_ADJ_PCT / 100
+		//fmt.Printf("---     in sync: adjust period = %.0f\n", pll.period)
 	} else {
 		// Out of sync: adjust base clock towards centre
 		pll.period += (pll.periodIdeal - pll.period) * PERIOD_ADJ_PCT / 100
+		//fmt.Printf("---     out of sync: normalize period = %.0f\n", pll.period)
 	}
 
 	// Clamp the period adjustment range
-        // the minimum allowed clock period
+	// the minimum allowed clock period
 	pMin := (pll.periodIdeal * (100 - CLOCK_MAX_ADJ)) / 100
 	if pll.period < pMin {
 		pll.period = pMin
+		//fmt.Printf("---     clamp to min: period = %.0f\n", pll.period)
 	}
 
-        // the maximum allowed clock period
-        pMax := (pll.periodIdeal * (100 + CLOCK_MAX_ADJ)) / 100
+	// the maximum allowed clock period
+	pMax := (pll.periodIdeal * (100 + CLOCK_MAX_ADJ)) / 100
 	if pll.period > pMax {
 		pll.period = pMax
+		//fmt.Printf("---     clamp to max: period = %.0f\n", pll.period)
 	}
 
 	// PLL: Adjust clock phase according to mismatch
@@ -642,23 +652,22 @@ func pllNextBit(pll *pllState, fi *fluxIterator) bool {
 	newFlux := pll.flux * (100 - PHASE_ADJ_PCT) / 100
 	pll.time += pll.flux - newFlux
 	pll.flux = newFlux
+	//fmt.Printf("---     adjust phase: newFlux = %.0f, time = %.0f, flux = %.0f\n", newFlux, pll.time, pll.flux)
 
 	pll.clockedZeros = 0
 	return true // 1
 }
 
-//
 // Extract index pulse timings from flux data.
 // Calculate RPM and bit rate.
 // Return the calculated RPM: 300 or 360.
 // Return the calculated bit rate: 250, 500 or 1000 bits/msec.
-//
 func (c *Client) calculateRPMAndBitRate(fluxData []byte) (uint16, uint16) {
 	var indexPulses []uint64 // Index pulse times in nanoseconds
 
 	tickPeriodNs := 1e9 / float64(c.firmwareInfo.SampleFreqHz) // Nanoseconds per tick
 	ticksAccumulated := uint64(0)
-        countTransitions := uint64(0)
+	countTransitions := uint64(0)
 
 	i := 0
 	for i < len(fluxData) {
@@ -700,10 +709,10 @@ func (c *Client) calculateRPMAndBitRate(fluxData []byte) (uint16, uint16) {
 			// Direct interval: 1-249 ticks
 			ticksAccumulated += uint64(b)
 			if len(indexPulses) == 1 {
-			    // Ignore all before the first index pulse, and
-                            // after the second index pulse
-                            countTransitions++
-                        }
+				// Ignore all before the first index pulse, and
+				// after the second index pulse
+				countTransitions++
+			}
 			i++
 		} else {
 			// Extended interval: 250-254
@@ -713,10 +722,10 @@ func (c *Client) calculateRPMAndBitRate(fluxData []byte) (uint16, uint16) {
 			delta := 250 + uint64(b-250)*255 + uint64(fluxData[i+1]) - 1
 			ticksAccumulated += delta
 			if len(indexPulses) == 1 {
-			    // Ignore all before the first index pulse, and
-                            // after the second index pulse
-                            countTransitions++
-                        }
+				// Ignore all before the first index pulse, and
+				// after the second index pulse
+				countTransitions++
+			}
 			i += 2
 		}
 	}
@@ -730,34 +739,34 @@ func (c *Client) calculateRPMAndBitRate(fluxData []byte) (uint16, uint16) {
 	// Calculate RPM: 60 seconds per minute / period in seconds
 	//
 	trackDurationNs := indexPulses[1] - indexPulses[0]
-        //fmt.Printf("--- trackDurationNs = %d\n", trackDurationNs)
+	//fmt.Printf("--- trackDurationNs = %d\n", trackDurationNs)
 
 	rpm := 60e9 / trackDurationNs
-        //fmt.Printf("--- rpm = %d\n", rpm)
+	//fmt.Printf("--- rpm = %d\n", rpm)
 
 	// Round to either 300 or 360 RPM (standard floppy drive speeds)
 	// Use 330 RPM as the threshold (midpoint between 300 and 360)
 	if rpm < 330 {
 		rpm = 300
 	} else {
-                rpm = 360
-        }
+		rpm = 360
+	}
 
-        //
+	//
 	// Calculate bit rate
 	//
 	bitsPerMsec := countTransitions * 1e6 / trackDurationNs
-        //fmt.Printf("--- bitsPerMsec = %d\n", bitsPerMsec)
+	//fmt.Printf("--- bitsPerMsec = %d\n", bitsPerMsec)
 
-        // Round to standard floppy drive bitrates: 250, 500, or 1000 kbps
-        // Use thresholds: < 375 -> 250, < 750 -> 500, >= 750 -> 1000
-        if bitsPerMsec < 375 {
-                bitsPerMsec = 250
-        } else if bitsPerMsec < 750 {
-                bitsPerMsec = 500
-        } else {
-                bitsPerMsec = 1000
-        }
+	// Round to standard floppy drive bitrates: 250, 500, or 1000 kbps
+	// Use thresholds: < 375 -> 250, < 750 -> 500, >= 750 -> 1000
+	if bitsPerMsec < 375 {
+		bitsPerMsec = 250
+	} else if bitsPerMsec < 750 {
+		bitsPerMsec = 500
+	} else {
+		bitsPerMsec = 1000
+	}
 
 	return uint16(rpm), uint16(bitsPerMsec)
 }
@@ -798,7 +807,7 @@ func (c *Client) decodeFluxToMFM(fluxData []byte, bitRateKhz uint16) ([]byte, er
 				}
 				i += consumed
 				indexTime := ticksAccumulated //+ uint64(n28)
-				indexPulses = append(indexPulses, uint64(float64(indexTime) * tickPeriodNs))
+				indexPulses = append(indexPulses, uint64(float64(indexTime)*tickPeriodNs))
 				// Index pulse doesn't advance the cursor
 
 			case FLUXOP_SPACE:
@@ -817,12 +826,12 @@ func (c *Client) decodeFluxToMFM(fluxData []byte, bitRateKhz uint16) ([]byte, er
 			// Direct interval: 1-249 ticks
 			ticksAccumulated += uint64(b)
 			if len(indexPulses) == 1 {
-			    // Ignore all before the first index pulse, and
-                            // after the second index pulse
-                            transitionTime := uint64(float64(ticksAccumulated) * tickPeriodNs) - indexPulses[0]
-                            transitions = append(transitions, transitionTime)
-//fmt.Printf(" %d", transitionTime)
-                        }
+				// Ignore all before the first index pulse, and
+				// after the second index pulse
+				transitionTime := uint64(float64(ticksAccumulated)*tickPeriodNs) - indexPulses[0]
+				transitions = append(transitions, transitionTime)
+				//fmt.Printf(" %d", transitionTime)
+			}
 			i++
 		} else {
 			// Extended interval: 250-254
@@ -832,10 +841,10 @@ func (c *Client) decodeFluxToMFM(fluxData []byte, bitRateKhz uint16) ([]byte, er
 			delta := 250 + uint64(b-250)*255 + uint64(fluxData[i+1]) - 1
 			ticksAccumulated += delta
 			if len(indexPulses) == 1 {
-                            transitionTime := uint64(float64(ticksAccumulated) * tickPeriodNs) - indexPulses[0]
-                            transitions = append(transitions, transitionTime)
-//fmt.Printf(" %d", transitionTime)
-                        }
+				transitionTime := uint64(float64(ticksAccumulated)*tickPeriodNs) - indexPulses[0]
+				transitions = append(transitions, transitionTime)
+				//fmt.Printf(" %d", transitionTime)
+			}
 			i += 2
 		}
 	}
@@ -862,8 +871,8 @@ func (c *Client) decodeFluxToMFM(fluxData []byte, bitRateKhz uint16) ([]byte, er
 	// Generate MFM bitcells using PLL algorithm
 	var bitcells []bool
 	for {
-                first := pllNextBit(pll, fi)
-                second := pllNextBit(pll, fi)
+		first := pllNextBit(pll, fi)
+		second := pllNextBit(pll, fi)
 
 		bitcells = append(bitcells, first)
 		bitcells = append(bitcells, second)
@@ -924,9 +933,10 @@ func (c *Client) Read(filename string) error {
 	defer c.SetMotor(0, false) // Turn off motor when done
 
 	// Initialize HFE disk structure
+	NumberOfTracks := 82
 	disk := &hfe.Disk{
 		Header: hfe.Header{
-			NumberOfTrack:       80,
+			NumberOfTrack:       uint8(NumberOfTracks),
 			NumberOfSide:        2,
 			TrackEncoding:       hfe.ENC_ISOIBM_MFM,
 			BitRate:             500,              // Will be calculated from flux data
@@ -940,11 +950,11 @@ func (c *Client) Read(filename string) error {
 			Track0S1AltEncoding: 0xFF, // Use default encoding
 			Track0S1Encoding:    hfe.ENC_ISOIBM_MFM,
 		},
-		Tracks: make([]hfe.TrackData, 80),
+		Tracks: make([]hfe.TrackData, NumberOfTracks),
 	}
 
-	// Iterate through 80 cylinders (0-79) and 2 heads (0-1)
-	for cyl := 0; cyl < 2 /*80*/; cyl++ {
+	// Iterate through cylinders and heads
+	for cyl := 0; cyl < NumberOfTracks; cyl++ {
 		for head := 0; head < 2; head++ {
 			// Print progress message
 			if cyl != 0 || head != 0 {
