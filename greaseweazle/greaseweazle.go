@@ -547,20 +547,14 @@ func readN28(data []byte, offset int) (uint32, int, error) {
 	return value, 4, nil
 }
 
-// PLLState represents the state of the Phase-Locked Loop (old implementation, kept for compatibility)
-type PLLState struct {
-	period float64 // Expected bitcell period in nanoseconds
-	phase  float64 // Current phase accumulator (0.0 to 1.0)
-}
-
 // pllState represents the state of the SCP-style Phase-Locked Loop
 // Based on pll_t from legacy/mfmdisk/scp.c
 type pllState struct {
-	clockExpected float64 // Expected clock period in nanoseconds
-	clock         float64 // Current clock period in nanoseconds
-	flux          float64 // Accumulated flux time in nanoseconds
-	time          float64 // Total time elapsed in nanoseconds
-	clockedZeros  int     // Count of consecutive clocked zeros
+	periodIdeal  float64 // Expected clock period in nanoseconds
+	period       float64 // Current clock period in nanoseconds
+	flux         float64 // Accumulated flux time in nanoseconds
+	time         float64 // Total time elapsed in nanoseconds
+	clockedZeros int     // Count of consecutive clocked zeros
 }
 
 // fluxIterator provides flux intervals from absolute transition times
@@ -588,8 +582,8 @@ func (fi *fluxIterator) nextFlux() uint64 {
 // pllInit initializes the PLL state
 // Based on pll_init() from legacy/mfmdisk/scp.c
 func pllInit(pll *pllState, bitRateKhz uint16) {
-	pll.clockExpected = 1e6 / float64(bitRateKhz)
-	pll.clock = pll.clockExpected
+	pll.periodIdeal = 1e6 / float64(bitRateKhz) / 2
+	pll.period = pll.periodIdeal
 	pll.flux = 0
 	pll.time = 0
 	pll.clockedZeros = 0
@@ -599,8 +593,8 @@ func pllInit(pll *pllState, bitRateKhz uint16) {
 // Based on pll_next_bit() from legacy/mfmdisk/scp.c
 // Returns: 0 for clocked zero, 1 for transition detected
 func pllNextBit(pll *pllState, fi *fluxIterator) bool {
-	// Accumulate flux until it exceeds clock/2
-	for pll.flux < pll.clock/2 {
+	// Accumulate flux until it exceeds period/2
+	for pll.flux < pll.period / 2 {
 		fluxInterval := fi.nextFlux()
 		if fluxInterval == 0 {
 			// No more transitions, return 0 (clocked zero)
@@ -611,36 +605,36 @@ func pllNextBit(pll *pllState, fi *fluxIterator) bool {
 	}
 
 	// Advance time by one clock period
-	pll.time += pll.clock
-	pll.flux -= pll.clock
+	pll.time += pll.period
+	pll.flux -= pll.period
 
-	// Check if we have a clocked zero (flux >= clock/2 after subtraction)
-	if pll.flux >= pll.clock/2 {
+	// Check if we have a clocked zero (flux >= period/2 after subtraction)
+	if pll.flux >= pll.period / 2 {
 		pll.clockedZeros++
 		return false // 0
 	}
 
 	// Transition detected - adjust PLL parameters
-	// PLL: Adjust clock frequency according to phase mismatch
+	// PLL: Adjust clock period according to phase mismatch
 	if pll.clockedZeros <= 3 {
 		// In sync: adjust base clock by a fraction of phase mismatch
-		pll.clock += pll.flux * PERIOD_ADJ_PCT / 100
+		pll.period += pll.flux * PERIOD_ADJ_PCT / 100
 	} else {
 		// Out of sync: adjust base clock towards centre
-		pll.clock += (pll.clockExpected - pll.clock) * PERIOD_ADJ_PCT / 100
+		pll.period += (pll.periodIdeal - pll.period) * PERIOD_ADJ_PCT / 100
 	}
 
-	// Clamp the clock's adjustment range
+	// Clamp the period adjustment range
         // the minimum allowed clock period
-	clockMin := (pll.clockExpected * (100 - CLOCK_MAX_ADJ)) / 100
-	if pll.clock < clockMin {
-		pll.clock = clockMin
+	pMin := (pll.periodIdeal * (100 - CLOCK_MAX_ADJ)) / 100
+	if pll.period < pMin {
+		pll.period = pMin
 	}
 
         // the maximum allowed clock period
-        clockMax := (pll.clockExpected * (100 + CLOCK_MAX_ADJ)) / 100
-	if pll.clock > clockMax {
-		pll.clock = clockMax
+        pMax := (pll.periodIdeal * (100 + CLOCK_MAX_ADJ)) / 100
+	if pll.period > pMax {
+		pll.period = pMax
 	}
 
 	// PLL: Adjust clock phase according to mismatch
