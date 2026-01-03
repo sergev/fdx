@@ -785,8 +785,8 @@ func (c *Client) calculateBitRateFromFlux(fluxData []byte) uint16 {
 	return 1000
 }
 
-// decodeFluxToMFM decodes raw Greaseweazle flux data, applies PLL clock recovery,
-// and returns MFM bitstream as bytes (bitcells packed MSB-first)
+// decodeFluxToMFM recovers raw MFM bitcells from Greaseweazle flux data using PLL,
+// and returns MFM bitcells as bytes (bitcells packed MSB-first, not decoded data bits)
 func (c *Client) decodeFluxToMFM(fluxData []byte) ([]byte, error) {
 	if len(fluxData) == 0 {
 		return nil, fmt.Errorf("empty flux data")
@@ -865,7 +865,7 @@ func (c *Client) decodeFluxToMFM(fluxData []byte) ([]byte, error) {
 		phase:  0.0,
 	}
 
-	var bitcells []bool // MFM bitcells (true = 1, false = 0)
+	var bitcells []bool // MFM bitcells: true = transition (1), false = no transition (0)
 
 	if len(transitions) < 2 {
 		return nil, fmt.Errorf("insufficient transitions for PLL lock")
@@ -907,7 +907,6 @@ func (c *Client) decodeFluxToMFM(fluxData []byte) ([]byte, error) {
 	for transitionIdx < len(transitions) {
 		// Calculate bitcell boundaries
 		bitcellStart := currentTime
-		bitcellMiddle := currentTime + uint64(pll.period/2)
 		bitcellEnd := currentTime + uint64(pll.period)
 
 		// Look for transitions in this bitcell window
@@ -932,45 +931,23 @@ func (c *Client) decodeFluxToMFM(fluxData []byte) ([]byte, error) {
 			checkIdx++
 		}
 
-		// Determine MFM bitcell value based on transitions
-		hasMiddleTransition := false
+		// Store raw MFM bitcells: check if there's a transition at the end of the bitcell
+		// For HFE format, we store the actual bitcells (1 = transition, 0 = no transition)
+		// not the decoded data bits. Each bitcell represents whether there's a flux transition.
 		hasEndTransition := false
 
-		for _, transTime := range transitionsInBitcell {
-			middleWindowMin := bitcellMiddle - uint64(pll.period*PLL_WINDOW_TOLERANCE)
-			middleWindowMax := bitcellMiddle + uint64(pll.period*PLL_WINDOW_TOLERANCE)
-			endWindowMin := bitcellEnd - uint64(pll.period*PLL_WINDOW_TOLERANCE)
-			endWindowMax := bitcellEnd + uint64(pll.period*PLL_WINDOW_TOLERANCE)
+		endWindowMin := bitcellEnd - uint64(pll.period*PLL_WINDOW_TOLERANCE)
+		endWindowMax := bitcellEnd + uint64(pll.period*PLL_WINDOW_TOLERANCE)
 
-			if transTime >= middleWindowMin && transTime <= middleWindowMax {
-				hasMiddleTransition = true
-			}
+		for _, transTime := range transitionsInBitcell {
 			if transTime >= endWindowMin && transTime <= endWindowMax {
 				hasEndTransition = true
+				break
 			}
 		}
 
-		// Decode MFM pattern to data bit
-		// 00 = no transition -> 0
-		// 01 = transition at end -> 1
-		// 10 = transition at middle -> 0
-		// 11 = transition at middle and end -> 1
-		var dataBit bool
-		if hasMiddleTransition && hasEndTransition {
-			// '11' -> 1
-			dataBit = true
-		} else if hasEndTransition {
-			// '01' -> 1
-			dataBit = true
-		} else if hasMiddleTransition {
-			// '10' -> 0
-			dataBit = false
-		} else {
-			// '00' -> 0
-			dataBit = false
-		}
-
-		bitcells = append(bitcells, dataBit)
+		// Store raw bitcell: 1 if transition at end, 0 if no transition
+		bitcells = append(bitcells, hasEndTransition)
 
 		// Advance transition index past transitions we've processed
 		transitionIdx = checkIdx
@@ -1075,8 +1052,8 @@ func (c *Client) Read(filename string) error {
 		for head := 0; head < 2; head++ {
 			// Print progress message
 			if cyl != 0 || head != 0 {
-                            fmt.Printf("\rReading track %d, side %d...", cyl, head)
-                        }
+				fmt.Printf("\rReading track %d, side %d...", cyl, head)
+			}
 
 			// Seek to cylinder
 			err = c.Seek(byte(cyl))
