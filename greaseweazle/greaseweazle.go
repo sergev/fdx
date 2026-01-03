@@ -899,81 +899,63 @@ func (c *Client) decodeFluxToMFM(fluxData []byte) ([]byte, error) {
 		lastTransitionTime = transitions[i]
 	}
 
-	// Step 3: Generate bitcell boundaries and decode MFM
-	currentTime := transitions[0]
-	transitionIdx := 0
+	// Step 3: Sample bitcells incrementally at regular intervals
+	// Start sampling from the first transition (or slightly before to capture it)
+	startTime := transitions[0]
+	if startTime > uint64(pll.period/4) {
+		// Start slightly before the first transition to ensure we capture it
+		startTime -= uint64(pll.period / 4)
+	}
 
-	// Generate bitcells until we run out of transitions
-	for transitionIdx < len(transitions) {
-		// Calculate bitcell boundaries
-		bitcellStart := currentTime
-		bitcellEnd := currentTime + uint64(pll.period)
+	// Determine the end time (use the last transition + some margin, or use index pulses if available)
+	endTime := transitions[len(transitions)-1] + uint64(pll.period*10) // Add margin after last transition
+	if len(indexPulses) >= 2 {
+		// If we have multiple index pulses, sample until the second index pulse
+		endTime = indexPulses[1]
+	}
 
-		// Look for transitions in this bitcell window
-		windowMin := bitcellStart
-		windowMax := bitcellEnd + uint64(pll.period*PLL_WINDOW_TOLERANCE)
+	// Tolerance window for transition detection (25% of bitcell period)
+	tolerance := uint64(pll.period * PLL_WINDOW_TOLERANCE)
 
-		var transitionsInBitcell []uint64
+	// Sample at regular intervals (bitcell period)
+	sampleTime := startTime
+	transitionIdx := 0 // Index to speed up transition search (optimization: tracks first transition >= current window)
+
+	for sampleTime < endTime {
+		// Check if there's a transition within the tolerance window around this sample point
+		windowMin := sampleTime
+		if windowMin > tolerance {
+			windowMin -= tolerance
+		} else {
+			windowMin = 0
+		}
+		windowMax := sampleTime + tolerance
+
+		hasTransition := false
+
+		// Search for transitions in the window
+		// Skip transitions that are too early (optimization)
+		for transitionIdx < len(transitions) && transitions[transitionIdx] < windowMin {
+			transitionIdx++
+		}
+
+		// Check if any transition falls within the window
 		checkIdx := transitionIdx
-
-		// Collect all transitions in the bitcell window
-		for checkIdx < len(transitions) {
-			if transitions[checkIdx] < windowMin {
-				// Transition too early, skip it (noise?)
-				checkIdx++
-				continue
-			}
-			if transitions[checkIdx] > windowMax {
-				// Transition too late, stop looking
-				break
-			}
-			transitionsInBitcell = append(transitionsInBitcell, transitions[checkIdx])
-			checkIdx++
+		for checkIdx < len(transitions) && transitions[checkIdx] <= windowMax {
+			hasTransition = true
+			break
 		}
 
-		// Store raw MFM bitcells: check if there's a transition at the end of the bitcell
-		// For HFE format, we store the actual bitcells (1 = transition, 0 = no transition)
-		// not the decoded data bits. Each bitcell represents whether there's a flux transition.
-		hasEndTransition := false
+		// Store raw bitcell: 1 if transition found, 0 if not
+		bitcells = append(bitcells, hasTransition)
 
-		endWindowMin := bitcellEnd - uint64(pll.period*PLL_WINDOW_TOLERANCE)
-		endWindowMax := bitcellEnd + uint64(pll.period*PLL_WINDOW_TOLERANCE)
-
-		for _, transTime := range transitionsInBitcell {
-			if transTime >= endWindowMin && transTime <= endWindowMax {
-				hasEndTransition = true
-				break
-			}
-		}
-
-		// Store raw bitcell: 1 if transition at end, 0 if no transition
-		bitcells = append(bitcells, hasEndTransition)
-
-		// Advance transition index past transitions we've processed
-		transitionIdx = checkIdx
-
-		// Update PLL based on actual transition timing
-		if len(transitionsInBitcell) > 0 {
-			// Use the first transition for PLL update
-			actualPeriod := float64(transitionsInBitcell[0] - bitcellStart)
-			if actualPeriod > 0 {
-				phaseError := (actualPeriod - pll.period) / pll.period
-				pll.period += PLL_DAMPING * phaseError * pll.period
-
-				// Clamp period
-				if pll.period < MFM_NOMINAL_PERIOD_NS*0.5 {
-					pll.period = MFM_NOMINAL_PERIOD_NS * 0.5
-				}
-				if pll.period > MFM_NOMINAL_PERIOD_NS*1.5 {
-					pll.period = MFM_NOMINAL_PERIOD_NS * 1.5
-				}
-			}
-		}
-
-		currentTime = bitcellEnd
+		// Advance to next sample point
+		sampleTime += uint64(pll.period)
 
 		// Limit output size to prevent excessive memory usage
-		if len(bitcells) > 100000 {
+		// Allow up to ~2 revolutions worth of bitcells (200,000 bitcells = 25,000 bytes)
+		// For 250 kbps: 100,000 bitcells/rev * 2 = 200,000 bitcells
+		if len(bitcells) > 200000 {
 			break
 		}
 	}
