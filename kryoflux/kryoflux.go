@@ -858,10 +858,7 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 	var indexPulses []uint64 // Index pulse times in nanoseconds
 
 	i := 0
-	maxIterations := len(data) * 2 // Safety check to prevent infinite loops
-	iterationCount := 0
-	for i < len(data) && iterationCount < maxIterations {
-		iterationCount++
+	for i < len(data) {
 		val := data[i]
 
 		if val <= 7 {
@@ -970,10 +967,6 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 				return nil, fmt.Errorf("unknown block type 0x%02x at offset %d", val, i)
 			}
 		}
-	}
-
-	if iterationCount >= maxIterations {
-		return nil, fmt.Errorf("decoder loop exceeded maximum iterations (possible infinite loop)")
 	}
 
 	// Now filter transitions to only include those between first and second index
@@ -1140,16 +1133,7 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 
 	// Generate MFM bitcells using PLL algorithm
 	var bitcells []bool
-	pllIterations := 0
 	transitionsLen := len(decoded.FluxTransitions)
-
-	// Estimate max iterations: each transition generates roughly 1-2 bits
-	// Each iteration generates 2 bits, so we need roughly transitions iterations
-	// Add 50% margin for safety, but cap at reasonable maximum
-	maxPLLIterations := transitionsLen + (transitionsLen / 2)
-	if maxPLLIterations > 200000 {
-		maxPLLIterations = 200000
-	}
 
 	// Track when we've consumed all or nearly all transitions
 	// Once we've consumed this many, we should stop soon
@@ -1163,8 +1147,6 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 	maxIterationsWithoutTransition := 1000 // Stop if we generate 1000 iterations without consuming a transition
 
 	for {
-		pllIterations++
-
 		// Track progress to detect if transitions are being consumed
 		prevIndex := fi.index
 
@@ -1181,10 +1163,6 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 		// Lowered from 80% to catch edge cases like empty tracks (79.9%)
 		if consumedPercentage >= 75.0 && len(bitcells) >= transitionsLen*3 {
 			break
-		}
-
-		if pllIterations > maxPLLIterations {
-			return nil, fmt.Errorf("PLL loop exceeded maximum iterations (%d), possible infinite loop", maxPLLIterations)
 		}
 
 		// Check if transitions are exhausted or nearly exhausted BEFORE generating more bits
@@ -1268,8 +1246,7 @@ func (c *Client) Read(filename string) error {
 	}
 
 	// Initialize HFE disk structure
-	//	NumberOfTracks := 82
-	NumberOfTracks := 1
+	NumberOfTracks := 82
 	disk := &hfe.Disk{
 		Header: hfe.Header{
 			NumberOfTrack:       uint8(NumberOfTracks),
@@ -1290,7 +1267,7 @@ func (c *Client) Read(filename string) error {
 	}
 
 	// Iterate through cylinders and sides
-	for cyl := 0; cyl < NumberOfTracks; cyl++ {
+	for cyl := 79; cyl < NumberOfTracks; cyl++ {
 		for side := 0; side < 2; side++ {
 			// Print progress message
 			if cyl != 0 || side != 0 {
