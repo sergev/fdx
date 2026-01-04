@@ -1,7 +1,5 @@
-//
 // NOTE: This code is considered experimental.
 // Production use is not recommended due to unresolved stability issues.
-//
 package kryoflux
 
 import (
@@ -615,54 +613,55 @@ func (c *Client) findEndOfStream(data []byte) bool {
 	// Process the data
 	offset := 0
 	for {
-                if offset >= len(data) {
-                        // No EOF found - stream is incomplete
-                        return false
-                }
+		if offset >= len(data) {
+			// No EOF found - stream is incomplete
+			return false
+		}
 		val := data[offset]
 
-		if val <= 7 {
+		switch {
+		case val <= 0x07:
 			// Value: 2-byte sequence
 			offset += 2
-		} else if val >= 0xe {
-			// Sample: 1-byte
+		case val == 0x08:
+			// Nop1: 1 byte
+			offset += 1
+		case val == 0x09:
+			// Nop2: 2 bytes
+			offset += 2
+		case val == 0x0a:
+			// Nop3: 3 bytes
+			offset += 3
+		case val == 0x0b:
+			// Overflow16: 1-byte
 			offset++
-		} else {
-			switch val {
-			case 0x08, 0x09, 0x0a:
-				// Nop1-Nop3: variable length (1-3 bytes)
-				offset += int(val - 7)
-			case 0x0b:
-				// Overflow16: 1-byte
-				offset++
-			case 0x0c:
-				// Value16: 3-byte sequence
-				offset += 3
-			case 0x0d:
-				// OOB marker: 4-byte header + data
-				if offset + 4 > len(data) {
-                                        fmt.Printf("Lost OOB header!\n")
-					return true
-				}
-
-				oobType := data[offset+1]
-				if oobType == 0x0d {
-					// End of stream marker
-					return true
-				}
-
-				oobSize := int(data[offset+2]) | (int(data[offset+3]) << 8)
-				if offset + 4 + oobSize > len(data) {
-                                        fmt.Printf("Lost OOB data!\n")
-					return true
-				}
-
-				// OOB markers are metadata - skip over them
-				offset += oobSize + 4
-			default:
-                                fmt.Printf("Unknown block header 0x%x!\n", val)
+		case val == 0x0c:
+			// Value16: 3-byte sequence
+			offset += 3
+		case val == 0x0d:
+			// OOB marker: 4-byte header + data
+			if offset+4 > len(data) {
+				fmt.Printf("Lost OOB header!\n")
 				return true
 			}
+
+			oobType := data[offset+1]
+			if oobType == 0x0d {
+				// End of stream marker
+				return true
+			}
+
+			oobSize := int(data[offset+2]) | (int(data[offset+3]) << 8)
+			if offset+4+oobSize > len(data) {
+				fmt.Printf("Lost OOB data!\n")
+				return true
+			}
+
+			// OOB markers are metadata - skip over them
+			offset += oobSize + 4
+		case val >= 0xe:
+			// Sample: 1-byte
+			offset++
 		}
 	}
 }
@@ -1269,7 +1268,7 @@ func (c *Client) Read(filename string) error {
 	}
 
 	// Initialize HFE disk structure
-//	NumberOfTracks := 82
+	//	NumberOfTracks := 82
 	NumberOfTracks := 1
 	disk := &hfe.Disk{
 		Header: hfe.Header{
