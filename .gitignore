@@ -2,3 +2,5 @@ floppy
 floppy-tool
 *.raw
 .cursor
+*.hfe
+*.img

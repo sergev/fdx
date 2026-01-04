@@ -608,123 +608,63 @@ func (c *Client) streamOff() error {
 	return nil
 }
 
-// streamState tracks the state during stream validation
-type streamState struct {
-	complete      bool
-//	failed        bool
-	resultFound   bool
-	currentPos    uint32
-	skipCount     uint32
-//	failureReason string
-	firstOOBSeen  bool // Track if we've seen the first OOB marker with position
-}
-
-// validateStreamData validates KryoFlux stream data according to the format specification
-// Returns true if validation should continue, false if stream is complete
-func (c *Client) validateStreamData(state *streamState, data []byte) bool {
-
-	dataLen := uint32(len(data))
-	offset := uint32(0)
-
-	// Handle skip count from previous incomplete sequence
-	if state.skipCount > 0 {
-		n := state.skipCount
-		if n > dataLen {
-			n = dataLen
-		}
-		state.skipCount -= n
-		state.currentPos += n
-		offset += n
-		dataLen -= n
-	}
+// Find EOF marker in the KryoFlux stream data according to the format specification
+// Returns false if validation should continue, true if stream is complete or invalid
+func (c *Client) findEndOfStream(data []byte) bool {
 
 	// Process the data
-	for dataLen > 0 {
-		if offset >= uint32(len(data)) {
-			break
-		}
+	offset := 0
+	for {
+                if offset >= len(data) {
+                        // No EOF found - stream is incomplete
+                        return false
+                }
 		val := data[offset]
 
 		if val <= 7 {
 			// Value: 2-byte sequence
-			if dataLen < 2 {
-				state.skipCount = 2 - dataLen
-				state.currentPos += dataLen
-				return true
-			}
-			state.currentPos += 2
 			offset += 2
-			dataLen -= 2
 		} else if val >= 0xe {
 			// Sample: 1-byte
-			state.currentPos++
 			offset++
-			dataLen--
 		} else {
 			switch val {
 			case 0x08, 0x09, 0x0a:
 				// Nop1-Nop3: variable length (1-3 bytes)
-				noffset := int(val - 7)
-				if dataLen < uint32(noffset) {
-					state.skipCount = uint32(noffset) - dataLen
-					state.currentPos += dataLen
-					return true
-				}
-				state.currentPos += uint32(noffset)
-				offset += uint32(noffset)
-				dataLen -= uint32(noffset)
+				offset += int(val - 7)
 			case 0x0b:
 				// Overflow16: 1-byte
-				state.currentPos++
 				offset++
-				dataLen--
 			case 0x0c:
 				// Value16: 3-byte sequence
-				if dataLen < 3 {
-					state.skipCount = 3 - dataLen
-					state.currentPos += dataLen
-					return true
-				}
-				state.currentPos += 3
 				offset += 3
-				dataLen -= 3
 			case 0x0d:
 				// OOB marker: 4-byte header + data
-				if dataLen < 4 {
+				if offset + 4 > len(data) {
                                         fmt.Printf("Lost OOB header!\n")
-					state.complete = true
-					// Return false to stop processing
-					return false
+					return true
 				}
 
 				oobType := data[offset+1]
 				if oobType == 0x0d {
 					// End of stream marker
-					state.complete = true
-					// Return false to stop processing
-					return false
+					return true
 				}
 
-				oobSize := uint32(data[offset+2]) | (uint32(data[offset+3]) << 8)
-				if dataLen-4 < oobSize {
+				oobSize := int(data[offset+2]) | (int(data[offset+3]) << 8)
+				if offset + 4 + oobSize > len(data) {
                                         fmt.Printf("Lost OOB data!\n")
-					state.complete = true
-					// Return false to stop processing
-					return false
+					return true
 				}
 
-				// OOB markers are metadata and don't count toward stream position
-				// Just skip over them
+				// OOB markers are metadata - skip over them
 				offset += oobSize + 4
-				dataLen -= oobSize + 4
 			default:
                                 fmt.Printf("Unknown block header 0x%x!\n", val)
-				return false
+				return true
 			}
 		}
 	}
-
-	return !state.complete
 }
 
 // writePreamble writes the stream preamble with timestamp to the file
@@ -751,13 +691,6 @@ func (c *Client) writePreamble(file *os.File) error {
 
 // captureStream captures a stream from the device and writes it to the file
 func (c *Client) captureStream(file *os.File) error {
-	state := &streamState{
-		complete:     false,
-		resultFound:  false,
-		currentPos:   0,
-		skipCount:    0,
-		firstOOBSeen: false,
-	}
 
 	// Start stream
 	err := c.streamOn()
@@ -780,7 +713,7 @@ func (c *Client) captureStream(file *os.File) error {
 	noDataTimeout := 5 * time.Second
 
 	// Process incoming data synchronously
-	for !state.complete {
+	for {
 		// Check for overall timeout
 		if time.Since(startTime) > maxTotalTime {
 			return fmt.Errorf("stream read timeout: maximum time %v exceeded", maxTotalTime)
@@ -789,19 +722,12 @@ func (c *Client) captureStream(file *os.File) error {
 		// Check for no data timeout
 		if time.Since(lastDataTime) > noDataTimeout {
 			// If we have some data and stream is complete, that's okay
-			if state.complete {
-				break
-			}
 			return fmt.Errorf("stream read timeout: no data received within %v", noDataTimeout)
 		}
 
 		// Read data synchronously
 		length, err := c.bulkIn.Read(buf)
 		if err != nil {
-			// If stream completed successfully, EOF/error might be expected
-			if state.complete {
-				break
-			}
 			return fmt.Errorf("failed to read stream data: %w", err)
 		}
 
@@ -817,23 +743,16 @@ func (c *Client) captureStream(file *os.File) error {
 		data := make([]byte, length)
 		copy(data, buf[:length])
 
-		// Validate the data
-		shouldContinue := c.validateStreamData(state, data)
-
 		// Write the data
 		_, err = file.Write(data)
 		if err != nil {
 			return fmt.Errorf("failed to write stream data: %w", err)
 		}
 
-		// Stop processing if validation says to stop or if stream completed
-		if !shouldContinue || state.complete {
+		// Stop processing if EOF found
+		if c.findEndOfStream(data) {
 			break
 		}
-	}
-
-	if !state.complete {
-		return fmt.Errorf("stream did not complete properly (resultFound=%v, currentPos=%d)", state.resultFound, state.currentPos)
 	}
 
 	return nil
@@ -841,13 +760,6 @@ func (c *Client) captureStream(file *os.File) error {
 
 // captureStreamToMemory captures a stream from the device and returns the raw stream data
 func (c *Client) captureStreamToMemory() ([]byte, error) {
-	state := &streamState{
-		complete:     false,
-		resultFound:  false,
-		currentPos:   0,
-		skipCount:    0,
-		firstOOBSeen: false,
-	}
 
 	var streamData []byte
 
@@ -873,7 +785,7 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 	dataReceived := false
 
 	// Process incoming data synchronously
-	for !state.complete {
+	for {
 		// Check for overall timeout
 		if time.Since(startTime) > maxTotalTime {
 			// If we have some data, return it anyway - might be a partial stream
@@ -885,10 +797,6 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 
 		// Check for no data timeout
 		if time.Since(lastDataTime) > noDataTimeout {
-			// If stream is complete, that's okay
-			if state.complete {
-				break
-			}
 			// If we have some data, return it anyway - might be a partial stream
 			if len(streamData) > 0 {
 				return streamData, nil
@@ -904,10 +812,6 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 		// Read data synchronously
 		length, err := c.bulkIn.Read(buf)
 		if err != nil {
-			// If stream completed successfully, EOF/error might be expected
-			if state.complete {
-				break
-			}
 			return nil, fmt.Errorf("failed to read stream data: %w", err)
 		}
 
@@ -924,22 +828,13 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 		data := make([]byte, length)
 		copy(data, buf[:length])
 
-		// Validate the data
-		shouldContinue := c.validateStreamData(state, data)
-
 		// Append the data
 		streamData = append(streamData, data...)
 
-		// Stop processing if validation says to stop or if stream completed
-		if !shouldContinue || state.complete {
+		// Stop processing if EOF found
+		if c.findEndOfStream(data) {
 			break
 		}
-	}
-
-	// Allow partial streams - we'll check if we have enough data in the decoder
-	// If stream didn't complete but we have data, return it anyway
-	if !state.complete && len(streamData) == 0 {
-		return nil, fmt.Errorf("stream did not complete properly and no data received (resultFound=%v, currentPos=%d)", state.resultFound, state.currentPos)
 	}
 
 	return streamData, nil
@@ -1374,7 +1269,8 @@ func (c *Client) Read(filename string) error {
 	}
 
 	// Initialize HFE disk structure
-	NumberOfTracks := 82
+//	NumberOfTracks := 82
+	NumberOfTracks := 1
 	disk := &hfe.Disk{
 		Header: hfe.Header{
 			NumberOfTrack:       uint8(NumberOfTracks),
