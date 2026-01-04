@@ -1,5 +1,3 @@
-// NOTE: This code is considered experimental.
-// Production use is not recommended due to unresolved stability issues.
 package kryoflux
 
 import (
@@ -688,77 +686,8 @@ func (c *Client) writePreamble(file *os.File) error {
 	return nil
 }
 
-// captureStream captures a stream from the device and writes it to the file
-func (c *Client) captureStream(file *os.File) error {
-
-	// Start stream
-	err := c.streamOn()
-	if err != nil {
-		return fmt.Errorf("failed to start stream: %w", err)
-	}
-	streamStarted := true
-	defer func() {
-		// Stop stream if we started it
-		if streamStarted {
-			c.controlIn(RequestStream, 0, true)
-		}
-	}()
-
-	// Read buffer
-	buf := make([]byte, ReadBufferSize)
-	maxTotalTime := 30 * time.Second
-	startTime := time.Now()
-	lastDataTime := time.Now()
-	noDataTimeout := 5 * time.Second
-
-	// Process incoming data synchronously
-	for {
-		// Check for overall timeout
-		if time.Since(startTime) > maxTotalTime {
-			return fmt.Errorf("stream read timeout: maximum time %v exceeded", maxTotalTime)
-		}
-
-		// Check for no data timeout
-		if time.Since(lastDataTime) > noDataTimeout {
-			// If we have some data and stream is complete, that's okay
-			return fmt.Errorf("stream read timeout: no data received within %v", noDataTimeout)
-		}
-
-		// Read data synchronously
-		length, err := c.bulkIn.Read(buf)
-		if err != nil {
-			return fmt.Errorf("failed to read stream data: %w", err)
-		}
-
-		if length == 0 {
-			// No data, but continue
-			continue
-		}
-
-		// Update last data time
-		lastDataTime = time.Now()
-
-		// Copy data
-		data := make([]byte, length)
-		copy(data, buf[:length])
-
-		// Write the data
-		_, err = file.Write(data)
-		if err != nil {
-			return fmt.Errorf("failed to write stream data: %w", err)
-		}
-
-		// Stop processing if EOF found
-		if c.findEndOfStream(data) {
-			break
-		}
-	}
-
-	return nil
-}
-
-// captureStreamToMemory captures a stream from the device and returns the raw stream data
-func (c *Client) captureStreamToMemory() ([]byte, error) {
+// Capture a stream from the device and returns the raw stream data
+func (c *Client) captureStream() ([]byte, error) {
 
 	var streamData []byte
 
@@ -1239,14 +1168,15 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 
 // Read reads the entire floppy disk and writes it to the specified filename as HFE format
 func (c *Client) Read(filename string) error {
+	NumberOfTracks := 82
+
 	// Configure device with default values (device=0, density=0, minTrack=0, maxTrack=83)
-	err := c.configure(0, 0, 0, 83)
+	err := c.configure(0, 0, 0, NumberOfTracks - 1)
 	if err != nil {
 		return fmt.Errorf("failed to configure device: %w", err)
 	}
 
 	// Initialize HFE disk structure
-	NumberOfTracks := 82
 	disk := &hfe.Disk{
 		Header: hfe.Header{
 			NumberOfTrack:       uint8(NumberOfTracks),
@@ -1265,6 +1195,9 @@ func (c *Client) Read(filename string) error {
 		},
 		Tracks: make([]hfe.TrackData, NumberOfTracks),
 	}
+
+	// Assume uknown bitrate
+	disk.Header.BitRate = 0;
 
 	// Iterate through cylinders and sides
 	for cyl := 79; cyl < NumberOfTracks; cyl++ {
@@ -1293,7 +1226,7 @@ func (c *Client) Read(filename string) error {
 			}
 
 			// Capture stream data to memory
-			streamData, err := c.captureStreamToMemory()
+			streamData, err := c.captureStream()
 			if err != nil {
 				// Log error but continue with next track - some tracks may be unreadable
 				fmt.Printf("\nWarning: failed to capture stream from track %d, side %d: %v\n", cyl, side, err)
@@ -1328,8 +1261,8 @@ func (c *Client) Read(filename string) error {
 				continue
 			}
 
-			// Calculate RPM and BitRate from first track (cylinder 0, head 0)
-			if cyl == 0 && side == 0 {
+			// Calculate RPM and BitRate from first track
+			if disk.Header.BitRate == 0 {
 				calculatedRPM, calculatedBitRate := c.calculateRPMAndBitRate(decoded)
 				fmt.Printf("Rotation Speed: %d RPM\n", calculatedRPM)
 				fmt.Printf("Bit Rate: %d kbps\n", calculatedBitRate)
