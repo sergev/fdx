@@ -611,20 +611,17 @@ func (c *Client) streamOff() error {
 // streamState tracks the state during stream validation
 type streamState struct {
 	complete      bool
-	failed        bool
+//	failed        bool
 	resultFound   bool
 	currentPos    uint32
 	skipCount     uint32
-	failureReason string
+//	failureReason string
 	firstOOBSeen  bool // Track if we've seen the first OOB marker with position
 }
 
 // validateStreamData validates KryoFlux stream data according to the format specification
-// Returns true if validation should continue, false if stream is complete or failed
+// Returns true if validation should continue, false if stream is complete
 func (c *Client) validateStreamData(state *streamState, data []byte) bool {
-	if state.complete || state.failed {
-		return false
-	}
 
 	dataLen := uint32(len(data))
 	offset := uint32(0)
@@ -642,15 +639,7 @@ func (c *Client) validateStreamData(state *streamState, data []byte) bool {
 	}
 
 	// Process the data
-	validationIterations := 0
-	maxValidationIterations := len(data) * 2 // Safety check
 	for dataLen > 0 {
-		validationIterations++
-		if validationIterations > maxValidationIterations {
-			state.failed = true
-			state.failureReason = fmt.Sprintf("validation loop exceeded max iterations (%d)", maxValidationIterations)
-			return false
-		}
 		if offset >= uint32(len(data)) {
 			break
 		}
@@ -702,78 +691,26 @@ func (c *Client) validateStreamData(state *streamState, data []byte) bool {
 			case 0x0d:
 				// OOB marker: 4-byte header + data
 				if dataLen < 4 {
-					state.failed = true
-					state.failureReason = "no room for OOB header"
-					return false
-				}
-				oobType := data[offset+1]
-				oobSize := uint32(data[offset+2]) | (uint32(data[offset+3]) << 8)
-
-				if oobType == 0x0d && oobSize == 0x0d0d {
-					// End of stream marker
-					if !state.resultFound {
-						state.failed = true
-						state.failureReason = "end of data marker encountered before end of stream marker"
-						return false
-					}
+                                        fmt.Printf("Lost OOB header!\n")
 					state.complete = true
-					// Return false to stop processing (callback returns !stream_complete)
+					// Return false to stop processing
 					return false
 				}
 
+				oobType := data[offset+1]
+				if oobType == 0x0d {
+					// End of stream marker
+					state.complete = true
+					// Return false to stop processing
+					return false
+				}
+
+				oobSize := uint32(data[offset+2]) | (uint32(data[offset+3]) << 8)
 				if dataLen-4 < oobSize {
-					state.failed = true
-					state.failureReason = "no room for OOB data"
+                                        fmt.Printf("Lost OOB data!\n")
+					state.complete = true
+					// Return false to stop processing
 					return false
-				}
-
-				// Validate stream position for type 1 or 3
-				if oobType == 1 || oobType == 3 {
-					if oobSize < 4 {
-						state.failed = true
-						state.failureReason = "no room for stream position"
-						return false
-					}
-					streamPos := uint32(data[offset+4]) |
-						(uint32(data[offset+5]) << 8) |
-						(uint32(data[offset+6]) << 16) |
-						(uint32(data[offset+7]) << 24)
-					if !state.firstOOBSeen {
-						// First OOB marker with position - sync our position to it
-						// This handles the case where the device sends some data before the first OOB marker
-						state.currentPos = streamPos
-						state.firstOOBSeen = true
-					} else if streamPos != state.currentPos {
-						state.failed = true
-						state.failureReason = fmt.Sprintf("bad stream position %d != %d", streamPos, state.currentPos)
-						return false
-					}
-				}
-
-				// Check result for type 3
-				if oobType == 3 {
-					if oobSize < 8 {
-						state.failed = true
-						state.failureReason = "no room for result value"
-						return false
-					}
-					state.resultFound = true
-					result := uint32(data[offset+8]) |
-						(uint32(data[offset+9]) << 8) |
-						(uint32(data[offset+10]) << 16) |
-						(uint32(data[offset+11]) << 24)
-					if result != 0 {
-						state.failed = true
-						switch result {
-						case 1:
-							state.failureReason = "buffering problem - data transfer delivery to host could not keep up with disk read"
-						case 2:
-							state.failureReason = "no index signal detected"
-						default:
-							state.failureReason = fmt.Sprintf("unknown stream end result %d", result)
-						}
-						return false
-					}
 				}
 
 				// OOB markers are metadata and don't count toward stream position
@@ -781,15 +718,13 @@ func (c *Client) validateStreamData(state *streamState, data []byte) bool {
 				offset += oobSize + 4
 				dataLen -= oobSize + 4
 			default:
-				// Unknown/invalid marker (should be 0x08-0x0d, but we got something else)
-				state.failed = true
-				state.failureReason = fmt.Sprintf("unknown/invalid marker: 0x%02x", val)
+                                fmt.Printf("Unknown block header 0x%x!\n", val)
 				return false
 			}
 		}
 	}
 
-	return !state.complete && !state.failed
+	return !state.complete
 }
 
 // writePreamble writes the stream preamble with timestamp to the file
@@ -818,7 +753,6 @@ func (c *Client) writePreamble(file *os.File) error {
 func (c *Client) captureStream(file *os.File) error {
 	state := &streamState{
 		complete:     false,
-		failed:       false,
 		resultFound:  false,
 		currentPos:   0,
 		skipCount:    0,
@@ -846,7 +780,7 @@ func (c *Client) captureStream(file *os.File) error {
 	noDataTimeout := 5 * time.Second
 
 	// Process incoming data synchronously
-	for !state.complete && !state.failed {
+	for !state.complete {
 		// Check for overall timeout
 		if time.Since(startTime) > maxTotalTime {
 			return fmt.Errorf("stream read timeout: maximum time %v exceeded", maxTotalTime)
@@ -886,26 +820,18 @@ func (c *Client) captureStream(file *os.File) error {
 		// Validate the data
 		shouldContinue := c.validateStreamData(state, data)
 
-		// Write the data if validation passed (even if stream is now complete)
-		if !state.failed {
-			_, err := file.Write(data)
-			if err != nil {
-				return fmt.Errorf("failed to write stream data: %w", err)
-			}
+		// Write the data
+		_, err = file.Write(data)
+		if err != nil {
+			return fmt.Errorf("failed to write stream data: %w", err)
 		}
 
-		// Stop processing if validation says to stop or if stream completed/failed
-		if !shouldContinue || state.complete || state.failed {
+		// Stop processing if validation says to stop or if stream completed
+		if !shouldContinue || state.complete {
 			break
 		}
 	}
 
-	if state.failed {
-		if state.failureReason != "" {
-			return fmt.Errorf("stream validation failed: %s", state.failureReason)
-		}
-		return fmt.Errorf("stream validation failed")
-	}
 	if !state.complete {
 		return fmt.Errorf("stream did not complete properly (resultFound=%v, currentPos=%d)", state.resultFound, state.currentPos)
 	}
@@ -917,7 +843,6 @@ func (c *Client) captureStream(file *os.File) error {
 func (c *Client) captureStreamToMemory() ([]byte, error) {
 	state := &streamState{
 		complete:     false,
-		failed:       false,
 		resultFound:  false,
 		currentPos:   0,
 		skipCount:    0,
@@ -948,7 +873,7 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 	dataReceived := false
 
 	// Process incoming data synchronously
-	for !state.complete && !state.failed {
+	for !state.complete {
 		// Check for overall timeout
 		if time.Since(startTime) > maxTotalTime {
 			// If we have some data, return it anyway - might be a partial stream
@@ -1002,23 +927,15 @@ func (c *Client) captureStreamToMemory() ([]byte, error) {
 		// Validate the data
 		shouldContinue := c.validateStreamData(state, data)
 
-		// Append the data if validation passed
-		if !state.failed {
-			streamData = append(streamData, data...)
-		}
+		// Append the data
+		streamData = append(streamData, data...)
 
-		// Stop processing if validation says to stop or if stream completed/failed
-		if !shouldContinue || state.complete || state.failed {
+		// Stop processing if validation says to stop or if stream completed
+		if !shouldContinue || state.complete {
 			break
 		}
 	}
 
-	if state.failed {
-		if state.failureReason != "" {
-			return nil, fmt.Errorf("stream validation failed: %s", state.failureReason)
-		}
-		return nil, fmt.Errorf("stream validation failed")
-	}
 	// Allow partial streams - we'll check if we have enough data in the decoder
 	// If stream didn't complete but we have data, return it anyway
 	if !state.complete && len(streamData) == 0 {
