@@ -687,6 +687,132 @@ func (c *Client) findEndOfStream(data []byte) bool {
 	}
 }
 
+// Decode OOB Index blocks from the byte stream
+// Returns array of IndexTiming records
+// Typical sequence of OOB blocks is:
+//
+//	KFInfo: infoData='name=KryoFlux DiskSystem, version=3.00s, date=Mar 27 2018, time=18:25:55,
+//	                  hwid=1, hwrv=1, hs=1, sck=24027428.5714285, ick=3003428.5714285625'
+//	Index: streamPosition=21154, sampleCounter=66, indexCounter=109798707
+//	Index: streamPosition=96737, sampleCounter=66, indexCounter=110398148
+//	Index: streamPosition=172321, sampleCounter=66, indexCounter=110997615
+//	Index: streamPosition=247904, sampleCounter=66, indexCounter=111597074
+//	Index: streamPosition=323485, sampleCounter=60, indexCounter=112196534
+//	Index: streamPosition=399070, sampleCounter=66, indexCounter=112795973
+//	StreamEnd: streamPosition=399071, resultCode=0
+//	StreamInfo: streamPosition=399071, transferTime=0
+func (c *Client) decodePulses(data []byte) []IndexTiming {
+
+	var indexPulses []IndexTiming
+
+	// Process the data
+	offset := 0
+	for {
+		if offset >= len(data) {
+			// No EOF found - stream is incomplete
+			return indexPulses
+		}
+		val := data[offset]
+
+		switch {
+		case val <= 0x07:
+			// Value: 2-byte sequence
+			offset += 2
+		case val == 0x08:
+			// Nop1: 1 byte
+			offset += 1
+		case val == 0x09:
+			// Nop2: 2 bytes
+			offset += 2
+		case val == 0x0a:
+			// Nop3: 3 bytes
+			offset += 3
+		case val == 0x0b:
+			// Overflow16: 1-byte
+			offset++
+		case val == 0x0c:
+			// Value16: 3-byte sequence
+			offset += 3
+		case val == 0x0d:
+			// OOB marker: 4-byte header + data
+			if offset+4 > len(data) {
+				// Lost OOB header
+				return indexPulses
+			}
+
+			oobType := data[offset+1]
+			if oobType == 0x0d {
+				// End of stream marker
+				return indexPulses
+			}
+
+			oobSize := int(data[offset+2]) | (int(data[offset+3]) << 8)
+			if offset+4+oobSize > len(data) {
+				// Lost OOB data
+				return indexPulses
+			}
+
+			// Handle Index block (type 0x02)
+			if oobType == 0x02 && oobSize >= 12 {
+				//
+				// Index block: Stream Position (4 bytes), Sample Counter (4 bytes),
+				//              Index Counter (4 bytes)
+				// Example:
+				//      Index: streamPosition=21154, sampleCounter=66, indexCounter=109798707
+				//      Index: streamPosition=96737, sampleCounter=66, indexCounter=110398148
+				//
+				streamPosition := binary.LittleEndian.Uint32(data[offset+4 : offset+8])
+				sampleCounter := binary.LittleEndian.Uint32(data[offset+8 : offset+12])
+				indexCounter := binary.LittleEndian.Uint32(data[offset+12 : offset+16])
+				if DebugFlag {
+					fmt.Printf("--- Index: streamPosition=%d, sampleCounter=%d, indexCounter=%d\n",
+						streamPosition, sampleCounter, indexCounter)
+				}
+				indexPulses = append(indexPulses, IndexTiming{
+					streamPosition: streamPosition,
+					sampleCounter:  sampleCounter,
+					indexCounter:   indexCounter,
+				})
+			}
+
+			// Handle StreamEnd block (type 0x03) - indicates stream has ended
+			if oobType == 0x03 && oobSize >= 8 {
+				// StreamEnd block: Stream Position (4 bytes), Result Code (4 bytes)
+				streamPosition := binary.LittleEndian.Uint32(data[offset+4 : offset+8])
+				resultCode := binary.LittleEndian.Uint32(data[offset+8 : offset+12])
+				if DebugFlag {
+					fmt.Printf("--- StreamEnd: streamPosition=%d, resultCode=%d\n",
+						streamPosition, resultCode)
+				}
+			}
+
+			// Handle StreamInfo block (type 0x01) - provides information on the progress
+			if oobType == 0x03 && oobSize >= 8 {
+				// StreamEnd block: Stream Position (4 bytes), Transfer Time (4 bytes)
+				streamPosition := binary.LittleEndian.Uint32(data[offset+4 : offset+8])
+				transferTime := binary.LittleEndian.Uint32(data[offset+8 : offset+12])
+				if DebugFlag {
+					fmt.Printf("--- StreamInfo: streamPosition=%d, transferTime=%d\n",
+						streamPosition, transferTime)
+				}
+			}
+
+			// Handle KFInfo block (type 0x04) to extract sample clock
+			if oobType == 0x04 && oobSize > 0 {
+				infoData := string(data[offset+4 : offset+4+int(oobSize)])
+				if DebugFlag {
+					fmt.Printf("--- KFInfo: infoData='%s'\n", infoData)
+				}
+			}
+
+			offset += oobSize + 4
+		case val >= 0xe:
+			// Sample: 1-byte
+			offset++
+		}
+	}
+}
+
 // writePreamble writes the stream preamble with timestamp to the file
 func (c *Client) writePreamble(file *os.File) error {
 	now := time.Now()
@@ -791,35 +917,22 @@ func (c *Client) captureStream() ([]byte, error) {
 	return streamData, nil
 }
 
-// Decode KryoFlux stream data to extract flux transitions and index pulses.
-// Typical sequence of OOB blocks is:
-//
-//	KFInfo: infoData='name=KryoFlux DiskSystem, version=3.00s, date=Mar 27 2018, time=18:25:55,
-//	                  hwid=1, hwrv=1, hs=1, sck=24027428.5714285, ick=3003428.5714285625'
-//	Index: streamPosition=21154, sampleCounter=66, indexCounter=109798707
-//	Index: streamPosition=96737, sampleCounter=66, indexCounter=110398148
-//	Index: streamPosition=172321, sampleCounter=66, indexCounter=110997615
-//	Index: streamPosition=247904, sampleCounter=66, indexCounter=111597074
-//	Index: streamPosition=323485, sampleCounter=60, indexCounter=112196534
-//	Index: streamPosition=399070, sampleCounter=66, indexCounter=112795973
-//	StreamEnd: streamPosition=399071, resultCode=0
-//	StreamInfo: streamPosition=399071, transferTime=0
-func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
+// Extract flux transitions.
+func (c *Client) decodeFlux(data []byte, streamStart uint32, streamEnd uint32) ([]uint64, error) {
 
 	ticksAccumulated := uint64(0)
 
 	// Collect all flux transitions with their absolute times in ticks
 	// Filter transitions to only include those between first and second index
 	var fluxTransitions []uint64
-	var indexPulses []IndexTiming
 
-	i := 0
-	for i < len(data) {
+	i := streamStart
+	for i < streamEnd {
 		val := data[i]
 		switch {
 		case val <= 7:
 			// Flux2 block: 2-byte sequence
-			if i+1 >= len(data) {
+			if i+1 >= streamEnd {
 				return nil, fmt.Errorf("incomplete Flux2 block at offset %d", i)
 			}
 			fluxValue := (uint32(val) << 8) | uint32(data[i+1])
@@ -841,7 +954,7 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 			i++
 		case val == 0x0c:
 			// Flux3 block: 3-byte sequence
-			if i+2 >= len(data) {
+			if i+2 >= streamEnd {
 				return nil, fmt.Errorf("incomplete Flux3 block at offset %d", i)
 			}
 			fluxValue := (uint32(data[i+1]) << 8) | uint32(data[i+2])
@@ -850,74 +963,19 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 			i += 3
 		case val == 0x0d:
 			// OOB block: 4-byte header + optional data
-			if i+3 >= len(data) {
+			if i+3 >= streamEnd {
 				return nil, fmt.Errorf("incomplete OOB header at offset %d", i)
 			}
 			oobType := data[i+1]
 			if oobType == 0x0d {
 				// EOF marker - stop processing
-				i = len(data)
-				break
+				return fluxTransitions, nil
 			}
-
 			oobSize := uint32(data[i+2]) | (uint32(data[i+3]) << 8)
-			if i+4+int(oobSize) > len(data) {
+			if i+4+uint32(oobSize) > streamEnd {
 				return nil, fmt.Errorf("incomplete OOB data at offset %d", i)
 			}
-
-			// Handle StreamEnd block (type 0x03) - indicates stream has ended
-			if oobType == 0x03 && oobSize >= 8 {
-				// StreamEnd block: Stream Position (4 bytes), Result Code (4 bytes)
-				streamPosition := binary.LittleEndian.Uint32(data[i+4 : i+8])
-				resultCode := binary.LittleEndian.Uint32(data[i+8 : i+12])
-				if DebugFlag {
-					fmt.Printf("--- StreamEnd: streamPosition=%d, resultCode=%d\n",
-						streamPosition, resultCode)
-				}
-			}
-
-			// Handle StreamInfo block (type 0x01) - provides information on the progress
-			if oobType == 0x03 && oobSize >= 8 {
-				// StreamEnd block: Stream Position (4 bytes), Transfer Time (4 bytes)
-				streamPosition := binary.LittleEndian.Uint32(data[i+4 : i+8])
-				transferTime := binary.LittleEndian.Uint32(data[i+8 : i+12])
-				if DebugFlag {
-					fmt.Printf("--- StreamInfo: streamPosition=%d, transferTime=%d\n",
-						streamPosition, transferTime)
-				}
-			}
-
-			// Handle Index block (type 0x02)
-			if oobType == 0x02 && oobSize >= 12 {
-				//
-				// Index block: Stream Position (4 bytes), Sample Counter (4 bytes),
-				//              Index Counter (4 bytes)
-				// Example:
-				//      Index: streamPosition=21154, sampleCounter=66, indexCounter=109798707
-				//      Index: streamPosition=96737, sampleCounter=66, indexCounter=110398148
-				//
-				streamPosition := binary.LittleEndian.Uint32(data[i+4 : i+8])
-				sampleCounter := binary.LittleEndian.Uint32(data[i+8 : i+12])
-				indexCounter := binary.LittleEndian.Uint32(data[i+12 : i+16])
-				if DebugFlag {
-					fmt.Printf("--- Index: streamPosition=%d, sampleCounter=%d, indexCounter=%d\n",
-						streamPosition, sampleCounter, indexCounter)
-				}
-				indexPulses = append(indexPulses, IndexTiming{
-					streamPosition: streamPosition,
-					sampleCounter:  sampleCounter,
-					indexCounter:   indexCounter,
-				})
-			}
-
-			// Handle KFInfo block (type 0x04) to extract sample clock
-			if oobType == 0x04 && oobSize > 0 {
-				infoData := string(data[i+4 : i+4+int(oobSize)])
-				if DebugFlag {
-					fmt.Printf("--- KFInfo: infoData='%s'\n", infoData)
-				}
-			}
-			i += 4 + int(oobSize)
+			i += 4 + uint32(oobSize)
 		default: // val >= 0x0e
 			// Flux1 block: 1-byte (0x0E-0xFF)
 			fluxValue := uint32(val)
@@ -926,16 +984,28 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 			i++
 		}
 	}
+	return fluxTransitions, nil
+}
 
+// Decode KryoFlux stream data to extract flux transitions and index pulses.
+func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
+
+	// Decode index pulses
+	indexPulses := c.decodePulses(data)
 	if len(indexPulses) < 2 {
 		return nil, fmt.Errorf("no index pulses detected")
 	}
 
+	// Decode transitions between two indices
+	fluxTransitions, err := c.decodeFlux(data, indexPulses[0].streamPosition,
+		indexPulses[1].streamPosition)
+	if err != nil {
+		return nil, err
+	}
 	result := &DecodedStreamData{
 		FluxTransitions: fluxTransitions,
 		IndexPulses:     indexPulses,
 	}
-
 	return result, nil
 }
 
@@ -1172,8 +1242,7 @@ func (c *Client) Read(filename string) error {
 	disk.Header.BitRate = 0
 
 	// Iterate through cylinders and sides
-	//	for cyl := 0; cyl < NumberOfTracks; cyl++ {
-	for cyl := 79; cyl < 80; cyl++ {
+	for cyl := 0; cyl < NumberOfTracks; cyl++ {
 		for side := 0; side < 2; side++ {
 			// Print progress message
 			if cyl != 0 || side != 0 {
