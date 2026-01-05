@@ -52,15 +52,17 @@ const (
 	ReadBufferSize = 6400
 	StreamOnValue  = 0x601
 
-	// Default Sample Clock (Hz) - can be overridden by KFInfo blocks
+	// Default Sample Clock (Hz)
 	DefaultSampleClock = 24027428.57142857
+
+	// Enable for debug
+	DebugFlag = true
 )
 
 // DecodedStreamData contains decoded flux transitions and index information
 type DecodedStreamData struct {
 	FluxTransitions []uint64 // Flux transition times in nanoseconds (relative to first index)
 	IndexPulses     []uint64 // Index pulse times in nanoseconds
-	SampleClock     float64  // Sample clock frequency in Hz
 }
 
 // Client wraps a USB connection to a KryoFlux device
@@ -768,67 +770,83 @@ func (c *Client) captureStream() ([]byte, error) {
 	return streamData, nil
 }
 
-// decodeKryoFluxStream decodes KryoFlux stream data to extract flux transitions and index pulses
+// Decode KryoFlux stream data to extract flux transitions and index pulses.
+// Typical sequence of OOB blocks is:
+//
+//	KFInfo: infoData='name=KryoFlux DiskSystem, version=3.00s, date=Mar 27 2018, time=18:25:55,
+//	                  hwid=1, hwrv=1, hs=1, sck=24027428.5714285, ick=3003428.5714285625'
+//	Index: streamPosition=21154, sampleCounter=66, indexCounter=109798707
+//	Index: streamPosition=96737, sampleCounter=66, indexCounter=110398148
+//	Index: streamPosition=172321, sampleCounter=66, indexCounter=110997615
+//	Index: streamPosition=247904, sampleCounter=66, indexCounter=111597074
+//	Index: streamPosition=323485, sampleCounter=60, indexCounter=112196534
+//	Index: streamPosition=399070, sampleCounter=66, indexCounter=112795973
+//	StreamEnd: streamPosition=399071, resultCode=0
+//	StreamInfo: streamPosition=399071, transferTime=0
 func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 
-	result := &DecodedStreamData{
-		SampleClock: DefaultSampleClock,
-	}
-
-	tickPeriodNs := 1e9 / result.SampleClock // Nanoseconds per tick
+	tickPeriodNs := 1e9 / DefaultSampleClock // Nanoseconds per tick
 	ticksAccumulated := uint64(0)
-	ovl16Count := uint64(0) // Count of consecutive Ovl16 blocks
 
-	// Collect all flux transitions with their absolute times
-	type fluxTransition struct {
-		ticks uint64 // Absolute time in ticks
-	}
-	var allFluxTransitions []fluxTransition
+	// Collect all flux transitions with their absolute times in ticks
+	// Filter transitions to only include those between first and second index
+	var fluxTransitions []uint64
 	var indexPulses []uint64 // Index pulse times in nanoseconds
 
 	i := 0
 	for i < len(data) {
 		val := data[i]
-
-		if val <= 7 {
+		switch {
+		case val <= 7:
 			// Flux2 block: 2-byte sequence
 			if i+1 >= len(data) {
 				return nil, fmt.Errorf("incomplete Flux2 block at offset %d", i)
 			}
 			fluxValue := (uint32(val) << 8) | uint32(data[i+1])
-			fluxValue += uint32(ovl16Count) * 0x10000
-			ovl16Count = 0
 			ticksAccumulated += uint64(fluxValue)
-			allFluxTransitions = append(allFluxTransitions, fluxTransition{ticks: ticksAccumulated})
+			if len(indexPulses) == 1 {
+				// Only include transitions between first and second index
+				fluxTransitions = append(fluxTransitions, ticksAccumulated)
+			}
 			i += 2
-		} else if val == 0x0b {
-			// Ovl16 block: add 0x10000 to next flux value
-			ovl16Count++
+		case val == 0x08:
+			// NOP block: 1 byte
 			i++
-		} else if val == 0x0c {
+		case val == 0x09:
+			// NOP block: 2 bytes
+			i += 2
+		case val == 0x0a:
+			// NOP block: 3 bytes
+			i += 3
+		case val == 0x0b:
+			// Ovl16 block: add 0x10000 to next flux value
+			ticksAccumulated += 0x10000
+			i++
+		case val == 0x0c:
 			// Flux3 block: 3-byte sequence
 			if i+2 >= len(data) {
 				return nil, fmt.Errorf("incomplete Flux3 block at offset %d", i)
 			}
 			fluxValue := (uint32(data[i+1]) << 8) | uint32(data[i+2])
-			fluxValue += uint32(ovl16Count) * 0x10000
-			ovl16Count = 0
 			ticksAccumulated += uint64(fluxValue)
-			allFluxTransitions = append(allFluxTransitions, fluxTransition{ticks: ticksAccumulated})
+			if len(indexPulses) == 1 {
+				// Only include transitions between first and second index
+				fluxTransitions = append(fluxTransitions, ticksAccumulated)
+			}
 			i += 3
-		} else if val == 0x0d {
+		case val == 0x0d:
 			// OOB block: 4-byte header + optional data
 			if i+3 >= len(data) {
 				return nil, fmt.Errorf("incomplete OOB header at offset %d", i)
 			}
 			oobType := data[i+1]
-			oobSize := uint32(data[i+2]) | (uint32(data[i+3]) << 8)
-
-			if oobType == 0x0d && oobSize == 0x0d0d {
+			if oobType == 0x0d {
 				// EOF marker - stop processing
+				i = len(data)
 				break
 			}
 
+			oobSize := uint32(data[i+2]) | (uint32(data[i+3]) << 8)
 			if i+4+int(oobSize) > len(data) {
 				return nil, fmt.Errorf("incomplete OOB data at offset %d", i)
 			}
@@ -836,20 +854,56 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 			// Handle StreamEnd block (type 0x03) - indicates stream has ended
 			if oobType == 0x03 && oobSize >= 8 {
 				// StreamEnd block: Stream Position (4 bytes), Result Code (4 bytes)
+				streamPosition := binary.LittleEndian.Uint32(data[i+4 : i+8])
 				resultCode := binary.LittleEndian.Uint32(data[i+8 : i+12])
-				if resultCode != 0 {
-					// Non-zero result code indicates an error, but we can still process what we have
-					// Continue processing but break after handling this
+				if DebugFlag {
+					fmt.Printf("--- StreamEnd: streamPosition=%d, resultCode=%d\n",
+						streamPosition, resultCode)
 				}
-				// Break after StreamEnd to stop processing further
-				i += 4 + int(oobSize)
-				break
+			}
+
+			// Handle StreamInfo block (type 0x01) - provides information on the progress
+			if oobType == 0x03 && oobSize >= 8 {
+				// StreamEnd block: Stream Position (4 bytes), Transfer Time (4 bytes)
+				streamPosition := binary.LittleEndian.Uint32(data[i+4 : i+8])
+				transferTime := binary.LittleEndian.Uint32(data[i+8 : i+12])
+				if DebugFlag {
+					fmt.Printf("--- StreamInfo: streamPosition=%d, transferTime=%d\n",
+						streamPosition, transferTime)
+				}
 			}
 
 			// Handle Index block (type 0x02)
 			if oobType == 0x02 && oobSize >= 12 {
-				// Index block: Stream Position (4 bytes), Sample Counter (4 bytes), Index Counter (4 bytes)
-				sampleCounter := binary.LittleEndian.Uint32(data[i+4 : i+8])
+				//
+				// Index block: Stream Position (4 bytes), Sample Counter (4 bytes),
+				//              Index Counter (4 bytes)
+				//  * Stream Position: Indicates the position (in number of bytes)
+				//    in the stream buffer of the next flux reversal just after
+				//    the index was detected.
+				//  * Sample Counter: Gives the value of the Sample Counter when
+				//    the index was detected. This is used to get accurate timing
+				//    of the index in respect with the previous flux reversal.
+				//    The timing is given in number of Sample Clock (sck).
+				//    Note that it is possible that one or several sample counter
+				//    overflows happen before the index is detected
+				//  * Index Counter: Stores the value of the Index Counter when
+				//    the index is detected. The value is given in number of
+				//    Index Clock (ick). To get absolute timing values from
+				//    the index counter values, divide these numbers by
+				//    the index clock (ick)
+				//
+				// Example:
+				//      Index: streamPosition=21154, sampleCounter=66, indexCounter=109798707
+				//      Index: streamPosition=96737, sampleCounter=66, indexCounter=110398148
+				//
+				streamPosition := binary.LittleEndian.Uint32(data[i+4 : i+8])
+				sampleCounter := binary.LittleEndian.Uint32(data[i+8 : i+12])
+				indexCounter := binary.LittleEndian.Uint32(data[i+12 : i+16])
+				if DebugFlag {
+					fmt.Printf("--- Index: streamPosition=%d, sampleCounter=%d, indexCounter=%d\n",
+						streamPosition, sampleCounter, indexCounter)
+				}
 				// Index time = time of last flux transition + sample counter
 				indexTime := ticksAccumulated + uint64(sampleCounter)
 				indexTimeNs := uint64(float64(indexTime) * tickPeriodNs)
@@ -859,121 +913,31 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 			// Handle KFInfo block (type 0x04) to extract sample clock
 			if oobType == 0x04 && oobSize > 0 {
 				infoData := string(data[i+4 : i+4+int(oobSize)])
-				// Parse sck= value from info string
-				if strings.Contains(infoData, "sck=") {
-					parts := strings.Split(infoData, ",")
-					for _, part := range parts {
-						if strings.HasPrefix(part, "sck=") {
-							sckStr := strings.TrimPrefix(part, "sck=")
-							sckStr = strings.TrimSpace(sckStr)
-							if sck, err := strconv.ParseFloat(sckStr, 64); err == nil {
-								result.SampleClock = sck
-								tickPeriodNs = 1e9 / result.SampleClock
-							}
-						}
-					}
+				if DebugFlag {
+					fmt.Printf("--- KFInfo: infoData='%s'\n", infoData)
 				}
 			}
-
 			i += 4 + int(oobSize)
-		} else if val >= 0x0e {
+		default: // val >= 0x0e
 			// Flux1 block: 1-byte (0x0E-0xFF)
 			fluxValue := uint32(val)
-			fluxValue += uint32(ovl16Count) * 0x10000
-			ovl16Count = 0
 			ticksAccumulated += uint64(fluxValue)
-			allFluxTransitions = append(allFluxTransitions, fluxTransition{ticks: ticksAccumulated})
+			if len(indexPulses) == 1 {
+				// Only include transitions between first and second index
+				fluxTransitions = append(fluxTransitions, ticksAccumulated)
+			}
 			i++
-		} else {
-			// NOP blocks: 0x08 (1 byte), 0x09 (2 bytes), 0x0a (3 bytes)
-			if val == 0x08 {
-				i++
-			} else if val == 0x09 {
-				i += 2
-			} else if val == 0x0a {
-				i += 3
-			} else {
-				return nil, fmt.Errorf("unknown block type 0x%02x at offset %d", val, i)
-			}
 		}
 	}
 
-	// Now filter transitions to only include those between first and second index
-	// We need to ensure all transitions right before the second index are included
-	var fluxTransitions []uint64
-	if len(indexPulses) >= 2 {
-		firstIndexNs := indexPulses[0]
-		secondIndexNs := indexPulses[1]
-
-		// Calculate revolution duration
-		revolutionDurationNs := secondIndexNs - firstIndexNs
-
-		// Find the first flux transition after the second index pulse
-		// This helps us determine the true end of the first revolution
-		// We'll include transitions up to this point (if it's within a reasonable distance)
-		var firstTransitionAfterSecondIndexNs uint64 = 0
-		maxReasonableDistanceNs := revolutionDurationNs / 20 // 5% of revolution
-
-		for _, flux := range allFluxTransitions {
-			fluxTimeNs := uint64(float64(flux.ticks) * tickPeriodNs)
-			if fluxTimeNs > secondIndexNs {
-				// Found first transition after second index
-				if firstTransitionAfterSecondIndexNs == 0 || fluxTimeNs < firstTransitionAfterSecondIndexNs {
-					firstTransitionAfterSecondIndexNs = fluxTimeNs
-				}
-			}
-		}
-
-		// Determine the boundary: use the first transition after second index if it's close enough,
-		// otherwise use a margin after the second index
-		var secondIndexBoundaryNs uint64
-		if firstTransitionAfterSecondIndexNs > 0 &&
-			(firstTransitionAfterSecondIndexNs-secondIndexNs) <= maxReasonableDistanceNs {
-			// Include the first transition after second index if it's close enough
-			// This likely represents the end of the first revolution's data
-			secondIndexBoundaryNs = firstTransitionAfterSecondIndexNs
-		} else {
-			// Fallback: use a margin (2% of revolution) after second index
-			marginNs := revolutionDurationNs / 50 // 2% margin
-			secondIndexBoundaryNs = secondIndexNs + marginNs
-		}
-
-		for _, flux := range allFluxTransitions {
-			// Convert flux transition time from ticks to nanoseconds for comparison
-			// This avoids precision loss from converting index times back to ticks
-			fluxTimeNs := uint64(float64(flux.ticks) * tickPeriodNs)
-
-			// Include all transitions from first index up to the determined boundary
-			// This ensures we capture the complete revolution including sector 17 data
-			if fluxTimeNs >= firstIndexNs && fluxTimeNs <= secondIndexBoundaryNs {
-				// Convert to nanoseconds relative to first index
-				transitionTime := fluxTimeNs - firstIndexNs
-				fluxTransitions = append(fluxTransitions, transitionTime)
-			}
-		}
-	} else if len(indexPulses) == 1 {
-		// If only one index, use all transitions after it
-		firstIndexNs := indexPulses[0]
-		for _, flux := range allFluxTransitions {
-			// Convert flux transition time from ticks to nanoseconds for comparison
-			fluxTimeNs := uint64(float64(flux.ticks) * tickPeriodNs)
-			if fluxTimeNs >= firstIndexNs {
-				// Convert to nanoseconds relative to first index
-				transitionTime := fluxTimeNs - firstIndexNs
-				fluxTransitions = append(fluxTransitions, transitionTime)
-			}
-		}
-	} else if len(indexPulses) == 0 && len(allFluxTransitions) > 0 {
-		// If no index pulses found but we have transitions, use all transitions
-		// This handles edge cases where index detection failed but data is present
-		for _, flux := range allFluxTransitions {
-			transitionTime := uint64(float64(flux.ticks) * tickPeriodNs)
-			fluxTransitions = append(fluxTransitions, transitionTime)
-		}
+	if len(indexPulses) < 2 {
+		return nil, fmt.Errorf("no index pulses detected")
 	}
 
-	result.FluxTransitions = fluxTransitions
-	result.IndexPulses = indexPulses
+	result := &DecodedStreamData{
+		FluxTransitions: fluxTransitions,
+		IndexPulses:     indexPulses,
+	}
 
 	return result, nil
 }
@@ -1171,7 +1135,7 @@ func (c *Client) Read(filename string) error {
 	NumberOfTracks := 82
 
 	// Configure device with default values (device=0, density=0, minTrack=0, maxTrack=83)
-	err := c.configure(0, 0, 0, NumberOfTracks - 1)
+	err := c.configure(0, 0, 0, NumberOfTracks-1)
 	if err != nil {
 		return fmt.Errorf("failed to configure device: %w", err)
 	}
@@ -1197,10 +1161,11 @@ func (c *Client) Read(filename string) error {
 	}
 
 	// Assume uknown bitrate
-	disk.Header.BitRate = 0;
+	disk.Header.BitRate = 0
 
 	// Iterate through cylinders and sides
-	for cyl := 79; cyl < NumberOfTracks; cyl++ {
+	//	for cyl := 0; cyl < NumberOfTracks; cyl++ {
+	for cyl := 79; cyl < 80; cyl++ {
 		for side := 0; side < 2; side++ {
 			// Print progress message
 			if cyl != 0 || side != 0 {
