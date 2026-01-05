@@ -57,7 +57,7 @@ const (
 	DefaultIndexClock  = 3003428.5714285625
 
 	// Enable for debug
-	DebugFlag = true
+	DebugFlag = false
 )
 
 // Timing information about each index.
@@ -921,11 +921,16 @@ func (c *Client) captureStream() ([]byte, error) {
 func (c *Client) decodeFlux(data []byte, streamStart uint32, streamEnd uint32) ([]uint64, error) {
 
 	ticksAccumulated := uint64(0)
+	tickPeriodNs := 1e9 / DefaultSampleClock // Nanoseconds per tick
 
 	// Collect all flux transitions with their absolute times in ticks
 	// Filter transitions to only include those between first and second index
 	var fluxTransitions []uint64
 
+	if DebugFlag {
+		fmt.Printf("--- decodeFlux() streamStart=%d, streamEnd=%d\n", streamStart, streamEnd)
+		fmt.Printf("--- len(data) = %d\n", len(data))
+	}
 	i := streamStart
 	for i < streamEnd {
 		val := data[i]
@@ -937,7 +942,8 @@ func (c *Client) decodeFlux(data []byte, streamStart uint32, streamEnd uint32) (
 			}
 			fluxValue := (uint32(val) << 8) | uint32(data[i+1])
 			ticksAccumulated += uint64(fluxValue)
-			fluxTransitions = append(fluxTransitions, ticksAccumulated)
+			fluxNs := uint64(float64(ticksAccumulated) * tickPeriodNs)
+			fluxTransitions = append(fluxTransitions, fluxNs)
 			i += 2
 		case val == 0x08:
 			// NOP block: 1 byte
@@ -959,7 +965,8 @@ func (c *Client) decodeFlux(data []byte, streamStart uint32, streamEnd uint32) (
 			}
 			fluxValue := (uint32(data[i+1]) << 8) | uint32(data[i+2])
 			ticksAccumulated += uint64(fluxValue)
-			fluxTransitions = append(fluxTransitions, ticksAccumulated)
+			fluxNs := uint64(float64(ticksAccumulated) * tickPeriodNs)
+			fluxTransitions = append(fluxTransitions, fluxNs)
 			i += 3
 		case val == 0x0d:
 			// OOB block: 4-byte header + optional data
@@ -980,9 +987,13 @@ func (c *Client) decodeFlux(data []byte, streamStart uint32, streamEnd uint32) (
 			// Flux1 block: 1-byte (0x0E-0xFF)
 			fluxValue := uint32(val)
 			ticksAccumulated += uint64(fluxValue)
-			fluxTransitions = append(fluxTransitions, ticksAccumulated)
+			fluxNs := uint64(float64(ticksAccumulated) * tickPeriodNs)
+			fluxTransitions = append(fluxTransitions, fluxNs)
 			i++
 		}
+	}
+	if DebugFlag {
+		fmt.Printf("--- len(fluxTransitions) = %d\n", len(fluxTransitions))
 	}
 	return fluxTransitions, nil
 }
@@ -1059,10 +1070,9 @@ func (c *Client) calculateRPMAndBitRate(decoded *DecodedStreamData) (uint16, uin
 // kfFluxIterator provides flux intervals from KryoFlux decoded stream data
 // It implements pll.FluxSource interface
 type kfFluxIterator struct {
-	transitions     []uint64 // Absolute transition times in nanoseconds
-	index           int      // Current index into transitions
-	lastTime        uint64   // Last transition time (for calculating intervals)
-	exhaustedCalled bool     // Track if NextFlux() has been called when exhausted
+	transitions []uint64 // Absolute transition times in nanoseconds
+	index       int      // Current index into transitions
+	lastTime    uint64   // Last transition time (for calculating intervals)
 }
 
 // NextFlux returns the next flux interval in nanoseconds (time until next transition)
@@ -1070,8 +1080,7 @@ type kfFluxIterator struct {
 // Implements pll.FluxSource interface
 func (fi *kfFluxIterator) NextFlux() uint64 {
 	if fi.index >= len(fi.transitions) {
-		fi.exhaustedCalled = true // Mark that we've been called when exhausted
-		return 0                  // No more transitions
+		return 0 // No more transitions
 	}
 
 	nextTime := fi.transitions[fi.index]
@@ -1081,7 +1090,7 @@ func (fi *kfFluxIterator) NextFlux() uint64 {
 	return interval
 }
 
-// decodeFluxToMFM recovers raw MFM bitcells from KryoFlux decoded stream data using PLL,
+// Recover raw MFM bitcells from KryoFlux decoded stream data using PLL,
 // and returns MFM bitcells as bytes (bitcells packed MSB-first, not decoded data bits)
 func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) ([]byte, error) {
 	if len(decoded.FluxTransitions) == 0 {
@@ -1104,40 +1113,9 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 
 	// Generate MFM bitcells using PLL algorithm
 	var bitcells []bool
-	transitionsLen := len(decoded.FluxTransitions)
-
-	// Track when we've consumed all or nearly all transitions
-	// Once we've consumed this many, we should stop soon
-	stopThreshold := transitionsLen
-	if transitionsLen > 100 {
-		// Allow small buffer - if transitions are being consumed slowly, we may not hit exact length
-		stopThreshold = transitionsLen - 10
-	}
-
-	iterationsSinceLastTransition := 0
-	maxIterationsWithoutTransition := 1000 // Stop if we generate 1000 iterations without consuming a transition
-
 	for {
-		// Track progress to detect if transitions are being consumed
-		prevIndex := fi.index
-
-		// Calculate consumed percentage for termination checks
-		consumedPercentage := float64(fi.index) / float64(transitionsLen) * 100.0
-
-		// Stop if we've generated excessive bits but consumed very few transitions (PLL stuck)
-		// Check earlier: if we've generated 2x bits but consumed <5% transitions, PLL is likely stuck
-		if len(bitcells) >= transitionsLen*2 && consumedPercentage < 5.0 {
-			break
-		}
-
-		// Stop if we've consumed 75%+ transitions and generated excessive bits
-		// Lowered from 80% to catch edge cases like empty tracks (79.9%)
-		if consumedPercentage >= 75.0 && len(bitcells) >= transitionsLen*3 {
-			break
-		}
-
 		// Check if transitions are exhausted or nearly exhausted BEFORE generating more bits
-		if fi.index >= stopThreshold || fi.exhaustedCalled {
+		if fi.index >= len(decoded.FluxTransitions) {
 			// Transitions exhausted - stop immediately
 			break
 		}
@@ -1147,30 +1125,9 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 
 		bitcells = append(bitcells, first)
 		bitcells = append(bitcells, second)
-
-		// Check if index advanced (transition was consumed)
-		if fi.index > prevIndex {
-			iterationsSinceLastTransition = 0
-		} else {
-			iterationsSinceLastTransition++
-		}
-
-		// Stop if we've generated many iterations without consuming a transition
-		// This indicates all transitions have been consumed and we're just generating from accumulated flux
-		// Check if we've consumed at least 75% of transitions OR reached stopThreshold (lowered from 80% for edge cases)
-		if iterationsSinceLastTransition >= maxIterationsWithoutTransition {
-			// We've gone many iterations without consuming a transition
-			if fi.index >= stopThreshold || consumedPercentage >= 75.0 {
-				// Either we've reached threshold OR consumed 75%+ of transitions
-				break
-			}
-		}
-
-		// Check again after NextBit calls (they may have advanced fi.index or called NextFlux when exhausted)
-		if fi.index >= stopThreshold || fi.exhaustedCalled {
-			// Transitions exhausted during this iteration - stop
-			break
-		}
+	}
+	if DebugFlag {
+		fmt.Printf("--- len(bitcells) = %d\n", len(bitcells))
 	}
 
 	if len(bitcells) == 0 {
@@ -1199,6 +1156,9 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 	// Add any remaining partial byte
 	if bitCount > 0 {
 		mfmBytes = append(mfmBytes, currentByte)
+	}
+	if DebugFlag {
+		fmt.Printf("--- len(mfmBytes) = %d\n", len(mfmBytes))
 	}
 
 	if len(mfmBytes) == 0 {
@@ -1252,55 +1212,25 @@ func (c *Client) Read(filename string) error {
 			// Turn on motor and position head
 			err = c.motorOn(side, cyl)
 			if err != nil {
-				// Log error but continue - some tracks may be inaccessible
-				fmt.Printf("\nWarning: failed to position head at track %d, side %d: %v\n", cyl, side, err)
-				// Store empty data for this track
-				if side == 0 {
-					disk.Tracks[cyl].Side0 = []byte{}
-				} else {
-					disk.Tracks[cyl].Side1 = []byte{}
-				}
-				// Ensure cleanup
-				c.streamOff()
+				fmt.Printf(" ERROR\n")
 				c.motorOff()
-				time.Sleep(100 * time.Millisecond)
-				continue
+				return fmt.Errorf("failed to position head at track %d, side %d: %v", cyl, side, err)
 			}
 
 			// Capture stream data to memory
 			streamData, err := c.captureStream()
 			if err != nil {
-				// Log error but continue with next track - some tracks may be unreadable
-				fmt.Printf("\nWarning: failed to capture stream from track %d, side %d: %v\n", cyl, side, err)
-				// Store empty data for this track
-				if side == 0 {
-					disk.Tracks[cyl].Side0 = []byte{}
-				} else {
-					disk.Tracks[cyl].Side1 = []byte{}
-				}
-				// Ensure stream is stopped and give device time to recover
-				c.streamOff()
+				fmt.Printf(" ERROR\n")
 				c.motorOff()
-				time.Sleep(100 * time.Millisecond) // Brief pause for device recovery
-				continue
+				return fmt.Errorf("failed to capture stream from track %d, side %d: %v", cyl, side, err)
 			}
 
 			// Decode stream data to extract flux transitions
 			decoded, err := c.decodeKryoFluxStream(streamData)
 			if err != nil {
-				// Log error but continue with next track
-				fmt.Printf("\nWarning: failed to decode stream from track %d, side %d: %v\n", cyl, side, err)
-				// Store empty data for this track
-				if side == 0 {
-					disk.Tracks[cyl].Side0 = []byte{}
-				} else {
-					disk.Tracks[cyl].Side1 = []byte{}
-				}
-				// Ensure cleanup
-				c.streamOff()
+				fmt.Printf(" ERROR\n")
 				c.motorOff()
-				time.Sleep(100 * time.Millisecond)
-				continue
+				return fmt.Errorf("failed to decode stream from track %d, side %d: %v", cyl, side, err)
 			}
 
 			// Calculate RPM and BitRate from first track
@@ -1316,19 +1246,9 @@ func (c *Client) Read(filename string) error {
 			// Decode flux data to MFM bitstream
 			mfmBitstream, err := c.decodeFluxToMFM(decoded, disk.Header.BitRate)
 			if err != nil {
-				// Log error but continue with next track
-				fmt.Printf("\nWarning: failed to decode flux data to MFM from track %d, side %d: %v\n", cyl, side, err)
-				// Store empty data for this track
-				if side == 0 {
-					disk.Tracks[cyl].Side0 = []byte{}
-				} else {
-					disk.Tracks[cyl].Side1 = []byte{}
-				}
-				// Ensure cleanup
-				c.streamOff()
+				fmt.Printf(" ERROR\n")
 				c.motorOff()
-				time.Sleep(100 * time.Millisecond)
-				continue
+				return fmt.Errorf("failed to decode flux data to MFM from track %d, side %d: %v", cyl, side, err)
 			}
 
 			// Store MFM bitstream in appropriate side
