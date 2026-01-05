@@ -52,17 +52,38 @@ const (
 	ReadBufferSize = 6400
 	StreamOnValue  = 0x601
 
-	// Default Sample Clock (Hz)
+	// Default clocks in Hz
 	DefaultSampleClock = 24027428.57142857
+	DefaultIndexClock  = 3003428.5714285625
 
 	// Enable for debug
 	DebugFlag = true
 )
 
+// Timing information about each index.
+type IndexTiming struct {
+	streamPosition uint32
+	// Indicates the position (in number of bytes) in the stream buffer of the next
+	// flux reversal just after the index was detected.
+
+	sampleCounter uint32
+	// Gives the value of the Sample Counter when the index was detected.
+	// This is used to get accurate timing  of the index in respect with
+	// the previous flux reversal. The timing is given in number of
+	// Sample Clock (sck). Note that it is possible that one or several
+	// sample counter overflows happen before the index is detected
+
+	indexCounter uint32
+	// Stores the value of the Index Counter when the index is detected.
+	// The value is given in number of Index Clock (ick). To get absolute
+	// timing values from the index counter values, divide these numbers
+	// by the index clock (ick)
+}
+
 // DecodedStreamData contains decoded flux transitions and index information
 type DecodedStreamData struct {
-	FluxTransitions []uint64 // Flux transition times in nanoseconds (relative to first index)
-	IndexPulses     []uint64 // Index pulse times in nanoseconds
+	FluxTransitions []uint64      // Flux transition times in nanoseconds (relative to first index)
+	IndexPulses     []IndexTiming // Information about index pulse timing
 }
 
 // Client wraps a USB connection to a KryoFlux device
@@ -785,13 +806,12 @@ func (c *Client) captureStream() ([]byte, error) {
 //	StreamInfo: streamPosition=399071, transferTime=0
 func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 
-	tickPeriodNs := 1e9 / DefaultSampleClock // Nanoseconds per tick
 	ticksAccumulated := uint64(0)
 
 	// Collect all flux transitions with their absolute times in ticks
 	// Filter transitions to only include those between first and second index
 	var fluxTransitions []uint64
-	var indexPulses []uint64 // Index pulse times in nanoseconds
+	var indexPulses []IndexTiming
 
 	i := 0
 	for i < len(data) {
@@ -804,10 +824,7 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 			}
 			fluxValue := (uint32(val) << 8) | uint32(data[i+1])
 			ticksAccumulated += uint64(fluxValue)
-			if len(indexPulses) == 1 {
-				// Only include transitions between first and second index
-				fluxTransitions = append(fluxTransitions, ticksAccumulated)
-			}
+			fluxTransitions = append(fluxTransitions, ticksAccumulated)
 			i += 2
 		case val == 0x08:
 			// NOP block: 1 byte
@@ -829,10 +846,7 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 			}
 			fluxValue := (uint32(data[i+1]) << 8) | uint32(data[i+2])
 			ticksAccumulated += uint64(fluxValue)
-			if len(indexPulses) == 1 {
-				// Only include transitions between first and second index
-				fluxTransitions = append(fluxTransitions, ticksAccumulated)
-			}
+			fluxTransitions = append(fluxTransitions, ticksAccumulated)
 			i += 3
 		case val == 0x0d:
 			// OOB block: 4-byte header + optional data
@@ -878,21 +892,6 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 				//
 				// Index block: Stream Position (4 bytes), Sample Counter (4 bytes),
 				//              Index Counter (4 bytes)
-				//  * Stream Position: Indicates the position (in number of bytes)
-				//    in the stream buffer of the next flux reversal just after
-				//    the index was detected.
-				//  * Sample Counter: Gives the value of the Sample Counter when
-				//    the index was detected. This is used to get accurate timing
-				//    of the index in respect with the previous flux reversal.
-				//    The timing is given in number of Sample Clock (sck).
-				//    Note that it is possible that one or several sample counter
-				//    overflows happen before the index is detected
-				//  * Index Counter: Stores the value of the Index Counter when
-				//    the index is detected. The value is given in number of
-				//    Index Clock (ick). To get absolute timing values from
-				//    the index counter values, divide these numbers by
-				//    the index clock (ick)
-				//
 				// Example:
 				//      Index: streamPosition=21154, sampleCounter=66, indexCounter=109798707
 				//      Index: streamPosition=96737, sampleCounter=66, indexCounter=110398148
@@ -904,10 +903,11 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 					fmt.Printf("--- Index: streamPosition=%d, sampleCounter=%d, indexCounter=%d\n",
 						streamPosition, sampleCounter, indexCounter)
 				}
-				// Index time = time of last flux transition + sample counter
-				indexTime := ticksAccumulated + uint64(sampleCounter)
-				indexTimeNs := uint64(float64(indexTime) * tickPeriodNs)
-				indexPulses = append(indexPulses, indexTimeNs)
+				indexPulses = append(indexPulses, IndexTiming{
+					streamPosition: streamPosition,
+					sampleCounter:  sampleCounter,
+					indexCounter:   indexCounter,
+				})
 			}
 
 			// Handle KFInfo block (type 0x04) to extract sample clock
@@ -922,10 +922,7 @@ func (c *Client) decodeKryoFluxStream(data []byte) (*DecodedStreamData, error) {
 			// Flux1 block: 1-byte (0x0E-0xFF)
 			fluxValue := uint32(val)
 			ticksAccumulated += uint64(fluxValue)
-			if len(indexPulses) == 1 {
-				// Only include transitions between first and second index
-				fluxTransitions = append(fluxTransitions, ticksAccumulated)
-			}
+			fluxTransitions = append(fluxTransitions, ticksAccumulated)
 			i++
 		}
 	}
@@ -947,11 +944,22 @@ func (c *Client) calculateRPMAndBitRate(decoded *DecodedStreamData) (uint16, uin
 	if len(decoded.IndexPulses) < 2 {
 		return 300, 250 // Default RPM and bit rate
 	}
+	if DebugFlag {
+		fmt.Printf("--- len(decoded.IndexPulses) = %d\n", len(decoded.IndexPulses))
+	}
 
 	// Calculate RPM from index pulse intervals
 	// IndexPulses contains absolute times, so subtract to get interval
-	trackDurationNs := decoded.IndexPulses[1] - decoded.IndexPulses[0]
+	trackIndexTicks := float64(decoded.IndexPulses[1].indexCounter - decoded.IndexPulses[0].indexCounter)
+	trackDurationNs := uint64(trackIndexTicks / DefaultIndexClock * 1e9)
+	if DebugFlag {
+		fmt.Printf("--- track duration = %d nsec\n", trackDurationNs)
+	}
+
 	rpm := 60e9 / float64(trackDurationNs)
+	if DebugFlag {
+		fmt.Printf("--- rpm = %.2f\n", rpm)
+	}
 
 	// Round to either 300 or 360 RPM
 	var roundedRPM uint16
