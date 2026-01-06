@@ -1,7 +1,9 @@
 package greaseweazle
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 
 	"floppy/hfe"
 	"floppy/pll"
@@ -49,6 +51,39 @@ func (fi *fluxIterator) NextFlux() uint64 {
 	fi.lastTime = nextTime
 	fi.index++
 	return interval
+}
+
+// ReadFlux reads raw flux data from the current track
+// ticks: maximum ticks to read (0 = no limit)
+// maxIndex: maximum index pulses to read (0 = no limit, typically 2 for 2 revolutions)
+func (c *Client) ReadFlux(ticks uint32, maxIndex uint16) ([]byte, error) {
+	// Build CMD_READ_FLUX command: [CMD_READ_FLUX, 8, ticks (le32), maxIndex (le16)]
+	cmd := make([]byte, 8)
+	cmd[0] = CMD_READ_FLUX
+	cmd[1] = 8
+	binary.LittleEndian.PutUint32(cmd[2:6], ticks)
+	binary.LittleEndian.PutUint16(cmd[6:8], maxIndex)
+
+	err := c.doCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send READ_FLUX command: %w", err)
+	}
+
+	// Read flux data until we encounter a 0 byte (end of stream marker)
+	var data []byte
+	buf := make([]byte, 1)
+	for {
+		_, err := io.ReadFull(c.port, buf)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read flux data: %w", err)
+		}
+		if buf[0] == 0 {
+			break
+		}
+		data = append(data, buf[0])
+	}
+
+	return data, nil
 }
 
 // Extract index pulse timings from flux data.
