@@ -23,14 +23,14 @@ func encodeN28(value uint32) []byte {
 // mfmToFluxTransitions converts MFM bitcells to flux transition times
 // MFM bitcells are bits where transitions occur when bit values change
 // Returns transition times in nanoseconds relative to track start
-func mfmToFluxTransitions(mfmBits []byte, bitRateKhz uint16, sampleFreqHz uint32) ([]uint64, error) {
+func mfmToFluxTransitions(mfmBits []byte, bitRateKhz uint16) ([]uint64, error) {
 	if len(mfmBits) == 0 {
 		return nil, fmt.Errorf("empty MFM data")
 	}
 
 	// Calculate bitcell period in nanoseconds
 	// bitRateKhz is in kbps, so bitRate_bps = bitRateKhz * 1000
-	bitRateBps := float64(bitRateKhz) * 1000.0
+	bitRateBps := float64(bitRateKhz) * 1000.0 * 2
 	bitcellPeriodNs := 1e9 / bitRateBps
 
 	var transitions []uint64
@@ -262,7 +262,7 @@ func (c *Client) Write(filename string) error {
 			}
 
 			// Convert MFM bitcells to flux transitions
-			transitions, err := mfmToFluxTransitions(mfmBits, disk.Header.BitRate, c.firmwareInfo.SampleFreqHz)
+			transitions, err := mfmToFluxTransitions(mfmBits, disk.Header.BitRate)
 			if err != nil {
 				return fmt.Errorf("failed to convert MFM to flux transitions for cylinder %d, head %d: %w", cyl, head, err)
 			}

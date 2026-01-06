@@ -425,9 +425,9 @@ func TestEncodeOpcodes_BitrateCode(t *testing.T) {
 		bitrateKbps   uint16
 		expectedCode  byte
 	}{
-		{"250 kbps", 250, 144},  // round(36000000 / 250000) = 144
-		{"500 kbps", 500, 72},   // round(36000000 / 500000) = 72
-		{"1000 kbps", 1000, 36}, // round(36000000 / 1000000) = 36
+		{"250 kbps", 250, 72},  // round(36000000 / 250000 / 2) = 72
+		{"500 kbps", 500, 36},   // round(36000000 / 500000 / 2) = 36
+		{"1000 kbps", 1000, 18}, // round(36000000 / 1000000 / 2) = 18
 	}
 
 	for _, tt := range tests {

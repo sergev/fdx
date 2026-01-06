@@ -181,7 +181,7 @@ Opcodes are identified by the pattern: `(byte & 0xF0) == 0xF0`
 |--------|----------|-------------|
 | **NOP** | `0xF0` | No operation - used for alignment |
 | **SETINDEX** | `0xF1` | Mark index pulse position |
-| **SETBITRATE** | `0xF2 0xBB` | Change bitrate to `BB` (k-samples/sec) |
+| **SETBITRATE** | `0xF2 0xBB` | Change bitrate to 18000000/0xBB (samples/sec) |
 | **SKIPBITS** | `0xF3 0xLL` | Skip `LL` bits (0-7), then copy remaining bits from next byte |
 | **RAND** | `0xF4` | Random/weak byte - skip 8 bits |
 | **Reserved** | `0xFF` | Reserved for future use |
@@ -192,7 +192,7 @@ When reading HFEv3 tracks:
 
 1. **NOP (0xF0)**: Skip 8 bits, advance input pointer
 2. **SETINDEX (0xF1)**: Mark current output position as index, skip 8 bits
-3. **SETBITRATE (0xF2)**: Read next byte as new bitrate value, skip 16 bits total
+3. **SETBITRATE (0xF2)**: Read next byte as new bitrate divisor value (18000000/x), skip 16 bits total
 4. **SKIPBITS (0xF3)**:
    - Read next byte as skip count (0-7)
    - Skip `skip_count` bits from input
