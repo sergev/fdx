@@ -489,40 +489,16 @@ func Write(filename string, disk *Disk) error {
 	return nil
 }
 
-// encodeOpcodes encodes raw MFM bitstream data with HFEv3 opcodes
-// For uniform bitrate tracks, it inserts SETBITRATE and SETINDEX at the start and escapes
-// bytes in the opcode range (0xF0-0xFF, except RAND_OPCODE 0xF4) by XORing with 0x90
-// bitrateKbps: bitrate value in kbps from header (e.g., 250, 500, 1000)
-// The bitrate is converted to a code byte using: code = round(FLOPPYEMUFREQ / bitrate_bps)
-// Where bitrate_bps = bitrateKbps * 1000
+// Encode raw MFM bitstream data with HFEv3 opcodes
 func encodeOpcodes(data []byte, bitrateKbps uint16) []byte {
-	// Allocate output buffer (worst case: all bytes need escaping + SETBITRATE + SETINDEX)
-	result := make([]byte, 0, len(data)+3)
-
-	// Convert bitrate from kbps to code byte
-	// Formula: code = round(FLOPPYEMUFREQ / bitrate_bps)
-	// Simplified: code = round(36000000 / (bitrate_kbps * 1000))
-	bitrateBps := float64(bitrateKbps) * 1000.0
-	timeBase := float64(FLOPPYEMUFREQ) / bitrateBps / 2
-	bitrateCode := byte(timeBase)
-	if bitrateCode == 0 && bitrateKbps > 0 {
-		// Ensure non-zero code (minimum 1)
-		bitrateCode = 1
-	}
-
-	// Insert SETBITRATE opcode at the start (required by HFEv3 format)
-	// Format: SETBITRATE_OPCODE (0xF2) followed by bitrate code byte
-	result = append(result, SETBITRATE_OPCODE)
-	result = append(result, bitrateCode)
-
-	// Insert SETINDEX opcode (marks index position)
-	result = append(result, SETINDEX_OPCODE)
+	// Allocate output buffer (worst case: all bytes need escaping)
+	result := make([]byte, 0, len(data))
 
 	// Process each data byte
 	for _, b := range data {
 		// Escape bytes in opcode range (0xF0-0xFF) except RAND_OPCODE (0xF4)
 		// by XORing with 0x90 (per adjustrand function in legacy code)
-		if (b&OPCODE_MASK) == OPCODE_MASK && b != RAND_OPCODE {
+		if (b & OPCODE_MASK) == OPCODE_MASK && b != RAND_OPCODE {
 			// Escape by XORing with 0x90
 			result = append(result, b^0x90)
 		} else {

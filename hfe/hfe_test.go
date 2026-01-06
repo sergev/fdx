@@ -417,48 +417,6 @@ func TestProcessOpcodes_Empty(t *testing.T) {
 	}
 }
 
-func TestEncodeOpcodes_BitrateCode(t *testing.T) {
-	// Test that encodeOpcodes calculates the correct bitrate code for common bitrates
-	// Formula: code = round(FLOPPYEMUFREQ / bitrate_bps) where bitrate_bps = bitrateKbps * 1000
-	tests := []struct {
-		name          string
-		bitrateKbps   uint16
-		expectedCode  byte
-	}{
-		{"250 kbps", 250, 72},  // round(36000000 / 250000 / 2) = 72
-		{"500 kbps", 500, 36},   // round(36000000 / 500000 / 2) = 36
-		{"1000 kbps", 1000, 18}, // round(36000000 / 1000000 / 2) = 18
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create minimal test data (just a few bytes)
-			testData := []byte{0xAA, 0x55, 0x33}
-
-			encoded := encodeOpcodes(testData, tt.bitrateKbps)
-
-			// Verify structure: SETBITRATE_OPCODE (0xF2) followed by bitrate code
-			if len(encoded) < 3 {
-				t.Fatalf("encodeOpcodes() returned too short data: %d bytes", len(encoded))
-			}
-
-			if encoded[0] != SETBITRATE_OPCODE {
-				t.Errorf("encodeOpcodes() first byte = 0x%02X, expected SETBITRATE_OPCODE (0x%02X)", encoded[0], SETBITRATE_OPCODE)
-			}
-
-			bitrateCode := encoded[1]
-			if bitrateCode != tt.expectedCode {
-				t.Errorf("encodeOpcodes() bitrate code for %s = %d, expected %d", tt.name, bitrateCode, tt.expectedCode)
-			}
-
-			// Verify SETINDEX opcode follows
-			if encoded[2] != SETINDEX_OPCODE {
-				t.Errorf("encodeOpcodes() third byte = 0x%02X, expected SETINDEX_OPCODE (0x%02X)", encoded[2], SETINDEX_OPCODE)
-			}
-		})
-	}
-}
-
 // Test 3: Track Reading Tests (requires file operations)
 
 func TestReadTrack_SingleSide(t *testing.T) {
