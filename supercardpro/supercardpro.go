@@ -1,6 +1,7 @@
 package supercardpro
 
 import (
+	"encoding/binary"
 	"floppy/adapter"
 	"fmt"
 	"io"
@@ -33,7 +34,9 @@ const (
 	SCPCMD_SETPARAMS   = 0x91 // set parameters
 	SCPCMD_READFLUX    = 0xa0 // read flux level
 	SCPCMD_GETFLUXINFO = 0xa1 // get info for last flux read
+	SCPCMD_WRITEFLUX   = 0xa2 // write flux level
 	SCPCMD_SENDRAM_USB = 0xa9 // send data from buffer to USB
+	SCPCMD_LOADRAM_USB = 0xaa // load data from USB to buffer
 	SCPCMD_SCPINFO     = 0xd0 // get SCP info
 )
 
@@ -123,6 +126,11 @@ func (c *Client) scpSend(cmd byte, data []byte, readData []byte) error {
 			return fmt.Errorf("failed to read RAM data: %w", err)
 		}
 	}
+
+	// Special handling for LOADRAM_USB: write data after the initial 8-byte command
+	// For LOADRAM_USB, the data parameter should contain [offset(be32), length(be32), actual_data...]
+	// But we only send the 8-byte header in the command packet, then write the data separately
+	// This is handled in loadRAM() which passes only the header to scpSend
 
 	// Read response: [cmd_echo][status]
 	response := make([]byte, 2)
@@ -276,19 +284,156 @@ func (c *Client) PrintStatus() {
 	fmt.Printf("Serial Number: %s\n", c.serialNumber)
 }
 
-// Write writes data from the specified filename to the floppy disk
-func (c *Client) Write(filename string) error {
-	return fmt.Errorf("Write() not yet implemented for SuperCard Pro adapter")
+// loadRAM loads flux data into device RAM buffer
+// fluxData should be uint16 samples (big-endian), total length = nrSamples * 2 bytes
+func (c *Client) loadRAM(fluxData []byte) error {
+	if len(fluxData)%2 != 0 {
+		return fmt.Errorf("flux data length must be even (uint16 samples)")
+	}
+
+	// Build LOADRAM_USB command header: [offset(be32), length(be32)]
+	// The command packet contains only the 8-byte header [cmd, len=8, offset, length, checksum]
+	// Then we write the actual data separately
+	ramCmdHeader := make([]byte, 8)
+	binary.BigEndian.PutUint32(ramCmdHeader[0:4], 0)                     // offset = 0
+	binary.BigEndian.PutUint32(ramCmdHeader[4:8], uint32(len(fluxData))) // length
+
+	// Build command packet manually: [cmd][len][data...][checksum]
+	// We need to send the command packet, then the data, then read the response
+	packet := make([]byte, 3+8)
+	packet[0] = SCPCMD_LOADRAM_USB
+	packet[1] = 8 // length of header data
+	copy(packet[2:10], ramCmdHeader)
+
+	// Calculate checksum: 0x4a + sum of cmd, len, and data bytes
+	checksum := byte(0x4a)
+	for i := 0; i < 10; i++ {
+		checksum += packet[i]
+	}
+	packet[10] = checksum
+
+	// Write command packet to serial port
+	_, err := c.port.Write(packet)
+	if err != nil {
+		return fmt.Errorf("failed to write LOADRAM_USB command packet: %w", err)
+	}
+
+	// Write the actual flux data (device expects this immediately after command packet)
+	_, err = c.port.Write(fluxData)
+	if err != nil {
+		return fmt.Errorf("failed to write flux data: %w", err)
+	}
+
+	// Read the response (cmd_echo, status) that comes after the data
+	response := make([]byte, 2)
+	_, err = io.ReadFull(c.port, response)
+	if err != nil {
+		return fmt.Errorf("failed to read command response: %w", err)
+	}
+
+	// Validate echo matches sent command
+	if response[0] != SCPCMD_LOADRAM_USB {
+		return fmt.Errorf("command echo mismatch: sent 0x%02x, received 0x%02x", SCPCMD_LOADRAM_USB, response[0])
+	}
+
+	// Check status
+	if response[1] != SCP_STATUS_OK {
+		return fmt.Errorf("LOADRAM_USB command failed with status 0x%02x", response[1])
+	}
+
+	return nil
 }
 
-// Format formats the floppy disk
-func (c *Client) Format() error {
-	return fmt.Errorf("Format() not yet implemented for SuperCard Pro adapter")
+// Write flux data with wipe track flag enabled
+// nrSamples is the number of uint16 flux samples
+// nrRevs is the number of revolutions to write (1 for erase, typically 2-5 for normal writes)
+func (c *Client) writeFlux(nrSamples uint32, nrRevs uint8) error {
+	// Build WRITEFLUX command: [nr_samples(be32), nr_revs]
+	// nr_revs: number of revolutions to write (1 = faster erase, 5 = multiple revolutions)
+	writeCmd := make([]byte, 5)
+	binary.BigEndian.PutUint32(writeCmd[0:4], nrSamples) // number of flux samples
+	writeCmd[4] = nrRevs                                 // number of revolutions
+
+	err := c.scpSend(SCPCMD_WRITEFLUX, writeCmd, nil)
+	if err != nil {
+		return fmt.Errorf("failed to write flux with wipe: %w", err)
+	}
+
+	return nil
+}
+
+// Generate minimal flux data for one revolution
+// Assume 300 RPM (250 kbps) drive speed
+// Return flux data as uint16 samples (big-endian) suitable for erase operation
+func (c *Client) generateEraseFlux() []byte {
+	// For 300 RPM: 1 revolution = 0.2 seconds = 200,000,000 nanoseconds
+	// IndexTime in 25ns units = 200,000,000 / 25 = 8,000,000
+	const indexTime = uint32(8000000) // 300 RPM in 25ns units
+
+	// Calculate approximate number of samples needed for one revolution
+	// Use a reasonable interval size (e.g., 2000 units = 50 microseconds)
+	// This gives us enough samples to cover one revolution
+	//	intervalSize := uint16(2000) // 2000 * 25ns = 50 microseconds
+	intervalSize := uint16(40) // 40 * 25ns = 1 microseconds
+	nrSamples := indexTime / uint32(intervalSize)
+
+	// Generate flux data: simple pattern of intervals
+	// For erase, we just need enough data - the exact pattern doesn't matter
+	fluxData := make([]byte, int(nrSamples)*2)
+	for i := uint32(0); i < nrSamples; i++ {
+		// Write interval as big-endian uint16
+		binary.BigEndian.PutUint16(fluxData[i*2:(i+1)*2], intervalSize)
+	}
+
+	return fluxData
 }
 
 // Erase erases the floppy disk
 func (c *Client) Erase() error {
-	return fmt.Errorf("Erase() not yet implemented for SuperCard Pro adapter")
+	// Select drive 0 and turn on motor
+	err := c.selectDrive(0)
+	if err != nil {
+		return fmt.Errorf("failed to select drive: %w", err)
+	}
+	defer c.deselectDrive(0)
+
+	// Generate minimal flux data for one revolution (assumes 300 RPM / 250 kbps)
+	flux := c.generateEraseFlux()
+	nrSamples := uint32(len(flux) / 2)
+
+	// Load flux data into RAM once (same data used for all tracks)
+	err = c.loadRAM(flux)
+	if err != nil {
+		return fmt.Errorf("failed to load flux data: %w", err)
+	}
+
+	// Erase all tracks (typically 0-163 for 3.5" floppy: 82 tracks × 2 sides)
+	// Standard 3.5" DD floppy has 80 tracks, but we'll go up to 82 to be safe
+	maxTrack := uint(82 * 2) // 82 cylinders × 2 sides
+
+	for track := uint(0); track < maxTrack; track++ {
+		cyl := track >> 1
+		side := track & 1
+
+		// Print progress
+		fmt.Printf("\rErasing cylinder %d, side %d...", cyl, side)
+
+		// Seek to track
+		err = c.seekTrack(track)
+		if err != nil {
+			return fmt.Errorf("failed to seek to track %d: %w", track, err)
+		}
+
+		// Write with wipe flag to erase the track (1 revolution for faster erase)
+		// Note: Flux data is already loaded in RAM from the initial loadRAM call
+		err = c.writeFlux(nrSamples, 1)
+		if err != nil {
+			return fmt.Errorf("failed to erase track %d: %w", track, err)
+		}
+	}
+	fmt.Printf(" Done\n")
+
+	return nil
 }
 
 // Close closes the serial port connection
@@ -297,4 +442,14 @@ func (c *Client) Close() error {
 		return c.port.Close()
 	}
 	return nil
+}
+
+// Write writes data from the specified filename to the floppy disk
+func (c *Client) Write(filename string) error {
+	return fmt.Errorf("Write() not yet implemented for SuperCard Pro adapter")
+}
+
+// Format formats the floppy disk
+func (c *Client) Format() error {
+	return fmt.Errorf("Format() not yet implemented for SuperCard Pro adapter")
 }

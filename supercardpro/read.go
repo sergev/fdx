@@ -217,20 +217,22 @@ func (c *Client) readFlux(nrRevs uint) (*FluxData, error) {
 
 	// Parse flux info and convert from big-endian to host byte order
 	fluxData := &FluxData{}
-	for i := 0; i < 5; i++ {
+	for i := uint(0); i < nrRevs; i++ {
 		offset := i * 8
 		fluxData.Info[i].IndexTime = binary.BigEndian.Uint32(infoData[offset : offset+4])
 		fluxData.Info[i].NrBitcells = binary.BigEndian.Uint32(infoData[offset+4 : offset+8])
+		//fmt.Printf("--- %d: IndexTime = %d, NrBitcells = %d\n", i, fluxData.Info[i].IndexTime, fluxData.Info[i].NrBitcells)
 	}
+	NrBitcells := fluxData.Info[0].NrBitcells
 
 	// Prepare RAM transfer command: 2 uint32_t values in big-endian
-	// Offset: 0, Length: 512*1024
+	// Offset: 0, Length: up to 512*1024
 	ramCmd := make([]byte, 8)
-	binary.BigEndian.PutUint32(ramCmd[0:4], 0)        // offset
-	binary.BigEndian.PutUint32(ramCmd[4:8], 512*1024) // length
+	binary.BigEndian.PutUint32(ramCmd[0:4], 0)            // offset
+	binary.BigEndian.PutUint32(ramCmd[4:8], NrBitcells*2) // length
 
-	// Allocate buffer for flux data (512KB)
-	fluxData.Data = make([]byte, 512*1024)
+	// Allocate buffer for flux data
+	fluxData.Data = make([]byte, NrBitcells*2)
 
 	// Send SENDRAM_USB command - this will read 512KB into fluxData.Data
 	err = c.scpSend(SCPCMD_SENDRAM_USB, ramCmd, fluxData.Data)
@@ -287,8 +289,8 @@ func (c *Client) Read(filename string) error {
 			return fmt.Errorf("failed to seek to track %d: %w", track, err)
 		}
 
-		// Read flux data (2 revolutions)
-		fluxData, err := c.readFlux(2)
+		// Read flux data (1 full revolution)
+		fluxData, err := c.readFlux(1)
 		if err != nil {
 			return fmt.Errorf("failed to read flux data from track %d: %w", track, err)
 		}
