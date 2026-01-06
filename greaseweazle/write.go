@@ -37,10 +37,6 @@ func mfmToFluxTransitions(mfmBits []byte, bitRateKhz uint16) ([]uint64, error) {
 	currentTime := uint64(0)
 	previousBit := -1 // -1 means no previous bit
 
-	// Add initial transition at time 0 to help PLL lock
-	// This ensures the flux stream starts with a known transition
-	transitions = append(transitions, 0)
-
 	// Process each bit in the MFM bitcell stream
 	bitCount := len(mfmBits) * 8
 	for i := 0; i < bitCount; i++ {
@@ -49,26 +45,16 @@ func mfmToFluxTransitions(mfmBits []byte, bitRateKhz uint16) ([]uint64, error) {
 		bitIdx := 7 - (i % 8) // MSB-first
 		currentBit := int((mfmBits[byteIdx] >> bitIdx) & 1)
 
-		// If this is the first bit, record it and continue
-		if previousBit == -1 {
-			previousBit = currentBit
-			// Advance time to next bitcell position
-			currentTime += uint64(bitcellPeriodNs)
-			continue
+		// Add transition time when bit changes
+		if currentBit != previousBit {
+			transitions = append(transitions, currentTime)
+                        previousBit = currentBit
 		}
 
 		// Advance time by one bitcell period before checking for transition
 		// This places the transition at the boundary between bitcells
 		currentTime += uint64(bitcellPeriodNs)
-
-		// Add transition time when bit changes
-		if currentBit != previousBit {
-			transitions = append(transitions, currentTime)
-		}
-
-		previousBit = currentBit
 	}
-
 	return transitions, nil
 }
 

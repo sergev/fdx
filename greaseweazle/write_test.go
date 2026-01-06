@@ -10,7 +10,7 @@ import (
 func TestMfmToFluxTransitions(t *testing.T) {
 	mfmBits := []byte{0x0f, 0x06}
 	bitRateKhz := uint16(500)
-	expectedTransitions := []uint64{4000, 8000, 13000, 15000}
+	expectedTransitions := []uint64{0, 4000, 8000, 13000, 15000}
 
 	// Call the function
 	transitions, err := mfmToFluxTransitions(mfmBits, bitRateKhz)
