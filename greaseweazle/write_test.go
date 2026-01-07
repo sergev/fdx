@@ -7,9 +7,15 @@ import (
 // Verify function mfmToFluxTransitions().
 // Encode two MFM bytes 0x0f 0x06 with bitRateKhz=500
 func TestMfmToFluxTransitions(t *testing.T) {
-	mfmBits := []byte{0x0f, 0x06}
 	bitRateKhz := uint16(500)
-	expectedTransitions := []uint64{4000, 8000, 13000, 15000}
+
+	//       ---4--- ---4--- ---a--- ---9---
+	//  MFM: 0 1 0 0 0 1 0 0 1 0 1 0 1 0 0 1
+	//          _______       ___     _____
+	// Flux: __/       \_____/   \___/     \_
+
+	mfmBits := []byte{0x44, 0xa9}
+	expectedTransitions := []uint64{2000, 6000, 9000, 11000, 13000, 16000}
 
 	// Call the function
 	transitions, err := mfmToFluxTransitions(mfmBits, bitRateKhz)

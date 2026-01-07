@@ -7,16 +7,20 @@ import (
 	"floppy/hfe"
 )
 
+const (
+	// Enable for debug
+	DebugFlag = false
+)
+
 // Encode a 28-bit value into N28 format (4 bytes).
-// N28 encoding packs 28 bits across 4 bytes, with bit 0 of each byte used as marker.
+// N28 encoding packs 28 bits across 4 bytes, with bit 0 of each byte set to 1.
+// According to Greaseweazle protocol: b0 = 1 | (N << 1), b1 = 1 | (N >> 6), etc.
 func encodeN28(value uint32) []byte {
 	result := make([]byte, 4)
-	// Spread 28 bits across 4 bytes: 7 bits per byte (in bit positions 1-7)
-	// Bit 0 of each byte is set to 0 to mark valid bytes (1 would be terminator)
-	result[0] = byte((value & 0x7F) << 1)
-	result[1] = byte(((value >> 7) & 0x7F) << 1)
-	result[2] = byte(((value >> 14) & 0x7F) << 1)
-	result[3] = byte(((value >> 21) & 0x7F) << 1)
+	result[0] = byte(1 | ((value & 0x7F) << 1))
+	result[1] = byte(1 | (((value >> 7) & 0x7F) << 1))
+	result[2] = byte(1 | (((value >> 14) & 0x7F) << 1))
+	result[3] = byte(1 | (((value >> 21) & 0x7F) << 1))
 	return result
 }
 
@@ -31,11 +35,10 @@ func mfmToFluxTransitions(mfmBits []byte, bitRateKhz uint16) ([]uint64, error) {
 	// Calculate bitcell period in nanoseconds
 	// bitRateKhz is in kbps, so bitRate_bps = bitRateKhz * 1000
 	bitRateBps := float64(bitRateKhz) * 1000.0 * 2
-	bitcellPeriodNs := 1e9 / bitRateBps
+	bitcellPeriodNs := uint64(1e9 / bitRateBps)
 
 	var transitions []uint64
 	currentTime := uint64(0)
-	previousBit := -1 // -1 means no previous bit
 
 	// Process each bit in the MFM bitcell stream
 	bitCount := len(mfmBits) * 8
@@ -43,33 +46,25 @@ func mfmToFluxTransitions(mfmBits []byte, bitRateKhz uint16) ([]uint64, error) {
 		// Extract bit at position i (MSB-first)
 		byteIdx := i / 8
 		bitIdx := 7 - (i % 8) // MSB-first
-		currentBit := int((mfmBits[byteIdx] >> bitIdx) & 1)
-
-		// Add transition time when bit changes
-		if currentBit != previousBit {
-			if currentTime > 0 {
-				transitions = append(transitions, currentTime)
-			}
-			previousBit = currentBit
-		}
+		currentBit := (mfmBits[byteIdx] & (1 << bitIdx)) != 0
 
 		// Advance time by one bitcell period before checking for transition
-		// This places the transition at the boundary between bitcells
-		currentTime += uint64(bitcellPeriodNs)
+		currentTime += bitcellPeriodNs
+
+		// Add transition time when bit changes
+		if currentBit {
+			transitions = append(transitions, currentTime)
+		}
 	}
 	return transitions, nil
 }
 
 // Encode flux transition times into Greaseweazle flux stream format.
-// Transitions are relative times in nanoseconds,
-// converted to ticks based on sample frequency.
-func encodeFluxStream(transitions []uint64, sampleFreqHz uint32) []byte {
-	if len(transitions) == 0 {
-		return []byte{0x00} // Empty stream terminator
-	}
-
+// Transitions are relative times in nanoseconds, converted to ticks based on sample frequency.
+// Ensure the stream covers at least minRotationTicks by padding with FLUXOP_SPACE if necessary.
+func encodeFluxStream(transitions []uint64, sampleFreqHz uint32, minRotationTicks uint32) []byte {
 	var result []byte
-	tickPeriodNs := 1e9 / float64(sampleFreqHz)
+	tickPeriodNs := 1e9 / float64(sampleFreqHz) // 13.889
 	lastTime := uint64(0)
 
 	// Encode each transition as an interval
@@ -85,7 +80,9 @@ func encodeFluxStream(transitions []uint64, sampleFreqHz uint32) []byte {
 		if intervalTicks == 0 {
 			intervalTicks = 1
 		}
-                //fmt.Printf(" %d", intervalTicks)
+		if DebugFlag {
+			fmt.Printf(" %d", intervalTicks)
+		}
 
 		if intervalTicks < 250 {
 			// Direct encoding: single byte (1-249)
@@ -118,7 +115,22 @@ func encodeFluxStream(transitions []uint64, sampleFreqHz uint32) []byte {
 
 		lastTime = transitionTime
 	}
-        //fmt.Printf("--- %d transitions -> %d fluxes\n", len(transitions), len(result))
+	if DebugFlag {
+		fmt.Printf("--- %d transitions -> %d fluxes\n", len(transitions), len(result))
+	}
+
+	// We need to cover a full rotation. If we haven't reached it yet, pad with FLUXOP_SPACE
+	// Calculate total duration from the last transition time (most accurate)
+	totalTicks := uint32(float64(lastTime) / tickPeriodNs)
+	if totalTicks < minRotationTicks {
+		remainingTicks := minRotationTicks - totalTicks
+		if DebugFlag {
+			fmt.Printf("--- append %d space ticks\n", remainingTicks)
+		}
+		result = append(result, 0xFF, FLUXOP_SPACE)
+		n28 := encodeN28(remainingTicks)
+		result = append(result, n28...)
+	}
 
 	// Terminate stream with null byte
 	result = append(result, 0x00)
@@ -197,6 +209,10 @@ func (c *Client) Write(filename string) error {
 		return fmt.Errorf("invalid HFE file: zero tracks or sides")
 	}
 
+	if disk.Header.FloppyRPM == 0 {
+		return fmt.Errorf("invalid HFE file: bad floppy rotation speed")
+	}
+
 	if disk.Header.TrackEncoding != hfe.ENC_ISOIBM_MFM {
 		return fmt.Errorf("unsupported track encoding: %d (only ISOIBM_MFM is supported)", disk.Header.TrackEncoding)
 	}
@@ -252,8 +268,16 @@ func (c *Client) Write(filename string) error {
 				return fmt.Errorf("failed to convert MFM to flux transitions for cylinder %d, head %d: %w", cyl, head, err)
 			}
 
+			// Calculate minimum rotation duration in ticks
+			// When terminate_at_index=1, the device expects flux data to cover at least one full rotation
+			// Rotation duration = 60 seconds / RPM = 60e9 nanoseconds / RPM
+			rotationDurationNs := 60e9 / float64(disk.Header.FloppyRPM)
+			tickPeriodNs := 1e9 / float64(c.firmwareInfo.SampleFreqHz)
+			minRotationTicks := uint32(rotationDurationNs / tickPeriodNs)
+
 			// Encode flux transitions to flux stream format
-			fluxData := encodeFluxStream(transitions, c.firmwareInfo.SampleFreqHz)
+			// Ensure it covers at least one full rotation to avoid underflow error
+			fluxData := encodeFluxStream(transitions, c.firmwareInfo.SampleFreqHz, minRotationTicks)
 
 			// Write flux stream to floppy
 			err = c.WriteFlux(fluxData)

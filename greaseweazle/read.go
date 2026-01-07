@@ -128,6 +128,9 @@ func (c *Client) calculateRPMAndBitRate(fluxData []byte) (uint16, uint16) {
 					break
 				}
 				i += consumed
+				if DebugFlag {
+					fmt.Printf(" %d", n28)
+				}
 				ticksAccumulated += uint64(n28)
 
 			default:
@@ -135,6 +138,9 @@ func (c *Client) calculateRPMAndBitRate(fluxData []byte) (uint16, uint16) {
 			}
 		} else if b < 250 {
 			// Direct interval: 1-249 ticks
+			if DebugFlag {
+				fmt.Printf(" %d", b)
+			}
 			ticksAccumulated += uint64(b)
 			if len(indexPulses) == 1 {
 				// Ignore all before the first index pulse, and
@@ -148,6 +154,9 @@ func (c *Client) calculateRPMAndBitRate(fluxData []byte) (uint16, uint16) {
 				break
 			}
 			delta := 250 + uint64(b-250)*255 + uint64(fluxData[i+1]) - 1
+			if DebugFlag {
+				fmt.Printf(" %d", delta)
+			}
 			ticksAccumulated += delta
 			if len(indexPulses) == 1 {
 				// Ignore all before the first index pulse, and
