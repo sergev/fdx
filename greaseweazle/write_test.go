@@ -4,13 +4,12 @@ import (
 	"testing"
 )
 
-//
-// Test case: encode two MFM bytes 0x0f 0x06 with bitRateKhz=500
-//
+// Verify function mfmToFluxTransitions().
+// Encode two MFM bytes 0x0f 0x06 with bitRateKhz=500
 func TestMfmToFluxTransitions(t *testing.T) {
 	mfmBits := []byte{0x0f, 0x06}
 	bitRateKhz := uint16(500)
-	expectedTransitions := []uint64{0, 4000, 8000, 13000, 15000}
+	expectedTransitions := []uint64{4000, 8000, 13000, 15000}
 
 	// Call the function
 	transitions, err := mfmToFluxTransitions(mfmBits, bitRateKhz)

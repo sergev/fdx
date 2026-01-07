@@ -7,8 +7,8 @@ import (
 	"floppy/hfe"
 )
 
-// encodeN28 encodes a 28-bit value into N28 format (4 bytes)
-// N28 encoding packs 28 bits across 4 bytes, with bit 0 of each byte used as marker
+// Encode a 28-bit value into N28 format (4 bytes).
+// N28 encoding packs 28 bits across 4 bytes, with bit 0 of each byte used as marker.
 func encodeN28(value uint32) []byte {
 	result := make([]byte, 4)
 	// Spread 28 bits across 4 bytes: 7 bits per byte (in bit positions 1-7)
@@ -20,9 +20,9 @@ func encodeN28(value uint32) []byte {
 	return result
 }
 
-// mfmToFluxTransitions converts MFM bitcells to flux transition times
-// MFM bitcells are bits where transitions occur when bit values change
-// Returns transition times in nanoseconds relative to track start
+// Convert MFM bitcells to flux transition times.
+// MFM bitcells are bits where transitions occur when bit values change.
+// Return transition times in nanoseconds relative to track start.
 func mfmToFluxTransitions(mfmBits []byte, bitRateKhz uint16) ([]uint64, error) {
 	if len(mfmBits) == 0 {
 		return nil, fmt.Errorf("empty MFM data")
@@ -47,8 +47,10 @@ func mfmToFluxTransitions(mfmBits []byte, bitRateKhz uint16) ([]uint64, error) {
 
 		// Add transition time when bit changes
 		if currentBit != previousBit {
-			transitions = append(transitions, currentTime)
-                        previousBit = currentBit
+			if currentTime > 0 {
+				transitions = append(transitions, currentTime)
+			}
+			previousBit = currentBit
 		}
 
 		// Advance time by one bitcell period before checking for transition
@@ -58,8 +60,9 @@ func mfmToFluxTransitions(mfmBits []byte, bitRateKhz uint16) ([]uint64, error) {
 	return transitions, nil
 }
 
-// encodeFluxStream encodes flux transition times into Greaseweazle flux stream format
-// Transitions are relative times in nanoseconds, converted to ticks based on sample frequency
+// Encode flux transition times into Greaseweazle flux stream format.
+// Transitions are relative times in nanoseconds,
+// converted to ticks based on sample frequency.
 func encodeFluxStream(transitions []uint64, sampleFreqHz uint32) []byte {
 	if len(transitions) == 0 {
 		return []byte{0x00} // Empty stream terminator
@@ -70,7 +73,7 @@ func encodeFluxStream(transitions []uint64, sampleFreqHz uint32) []byte {
 	lastTime := uint64(0)
 
 	// Encode each transition as an interval
-	for i, transitionTime := range transitions {
+	for _, transitionTime := range transitions {
 		// Calculate interval in nanoseconds
 		intervalNs := transitionTime - lastTime
 
@@ -82,6 +85,7 @@ func encodeFluxStream(transitions []uint64, sampleFreqHz uint32) []byte {
 		if intervalTicks == 0 {
 			intervalTicks = 1
 		}
+                //fmt.Printf(" %d", intervalTicks)
 
 		if intervalTicks < 250 {
 			// Direct encoding: single byte (1-249)
@@ -113,13 +117,8 @@ func encodeFluxStream(transitions []uint64, sampleFreqHz uint32) []byte {
 		}
 
 		lastTime = transitionTime
-
-		// Limit transitions to avoid excessive data
-		// Track typically has ~10000-20000 transitions per revolution
-		if i >= 50000 {
-			break
-		}
 	}
+        //fmt.Printf("--- %d transitions -> %d fluxes\n", len(transitions), len(result))
 
 	// Terminate stream with null byte
 	result = append(result, 0x00)
@@ -127,7 +126,7 @@ func encodeFluxStream(transitions []uint64, sampleFreqHz uint32) []byte {
 	return result
 }
 
-// WriteFlux sends CMD_WRITE_FLUX command and flux stream data to the device
+// Send CMD_WRITE_FLUX command and flux stream data to the device.
 func (c *Client) WriteFlux(fluxData []byte) error {
 	// Build CMD_WRITE_FLUX command
 	// Based on firmware source, the command format is:
@@ -174,7 +173,7 @@ func (c *Client) WriteFlux(fluxData []byte) error {
 	return nil
 }
 
-// Write reads an HFE file and writes it to the floppy disk track by track
+// Write an HFE file to the floppy disk track by track.
 func (c *Client) Write(filename string) error {
 	// Select drive 0 and turn on motor
 	err := c.SelectDrive(0)
