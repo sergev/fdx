@@ -421,57 +421,11 @@ func TestProcessOpcodes_Empty(t *testing.T) {
 // Test 3: Track Reading Tests (requires file operations)
 
 func TestReadTrack_SingleSide(t *testing.T) {
-	// Create a temporary HFE file with single-side track
-	disk := createTestDisk(1, 1, 256)
-	tmpFile := filepath.Join(t.TempDir(), "test_single.hfe")
-
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
-	}
-
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() error: %v", err)
-	}
-
-	if len(readDisk.Tracks) != 1 {
-		t.Fatalf("Read() expected 1 track, got %d", len(readDisk.Tracks))
-	}
-
-	if len(readDisk.Tracks[0].Side0) == 0 {
-		t.Error("Read() track 0 side 0 is empty")
-	}
-
-	if len(readDisk.Tracks[0].Side1) != 0 {
-		t.Error("Read() single-side track should have empty side 1")
-	}
+	testReadTrack(t, 1, 1, 256, HFEVersion3)
 }
 
 func TestReadTrack_DoubleSide(t *testing.T) {
-	// Create a temporary HFE file with double-side track
-	disk := createTestDisk(1, 2, 256)
-	tmpFile := filepath.Join(t.TempDir(), "test_double.hfe")
-
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
-	}
-
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() error: %v", err)
-	}
-
-	if len(readDisk.Tracks) != 1 {
-		t.Fatalf("Read() expected 1 track, got %d", len(readDisk.Tracks))
-	}
-
-	if len(readDisk.Tracks[0].Side0) == 0 {
-		t.Error("Read() track 0 side 0 is empty")
-	}
-
-	if len(readDisk.Tracks[0].Side1) == 0 {
-		t.Error("Read() track 0 side 1 is empty")
-	}
+	testReadTrack(t, 1, 2, 256, HFEVersion3)
 }
 
 // Test 4: Track Writing Tests
@@ -628,46 +582,52 @@ func getTestDataPath(filename string) string {
 	return testdataPath
 }
 
-func TestRead_SampleFile(t *testing.T) {
-	// Get absolute path to ensure we find the file
+// findSampleFile searches for a sample file in multiple possible locations
+// and returns the found path, or skips the test if not found
+func findSampleFile(t *testing.T, filename string) string {
+	t.Helper()
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Failed to get working directory: %v", err)
 	}
 
-	// Try multiple possible locations
 	possiblePaths := []string{
-		filepath.Join(wd, "testdata", "fat12v3.hfe"),
-		filepath.Join(wd, "..", "testdata", "fat12v3.hfe"),
-		"testdata/fat12v3.hfe",
+		filepath.Join(wd, "testdata", filename),
+		filepath.Join(wd, "..", "testdata", filename),
+		filepath.Join("testdata", filename),
 	}
 
-	var sampleFile string
 	for _, path := range possiblePaths {
 		if _, err := os.Stat(path); err == nil {
-			sampleFile = path
-			break
+			return path
 		}
 	}
 
+	t.Skipf("Sample file %s not found in any of: %v", filename, possiblePaths)
+	return ""
+}
+
+// testReadSampleFile is a parameterized helper for reading and validating sample files
+func testReadSampleFile(t *testing.T, filename string, expectedSignature string, skipErrorMsg string) {
+	t.Helper()
+	sampleFile := findSampleFile(t, filename)
 	if sampleFile == "" {
-		t.Skipf("Sample file fat12v3.hfe not found in any of: %v", possiblePaths)
-		return
+		return // Test was skipped
 	}
 
 	disk, err := Read(sampleFile)
 	if err != nil {
-		// If the file is not HFE v3 format, skip the test
-		if err.Error() == "invalid HFE v3 signature" {
-			t.Skipf("Sample file %s is not HFE v3 format (may be v1), skipping test", sampleFile)
+		// Check if we should skip due to format mismatch
+		if skipErrorMsg != "" && strings.Contains(err.Error(), skipErrorMsg) {
+			t.Skipf("Sample file %s: %s, skipping test", sampleFile, err.Error())
 			return
 		}
 		t.Fatalf("Read() error: %v", err)
 	}
 
 	// Verify header
-	if string(disk.Header.HeaderSignature[:]) != HFEv3Signature {
-		t.Errorf("Read() header signature = %s, expected %s", string(disk.Header.HeaderSignature[:]), HFEv3Signature)
+	if string(disk.Header.HeaderSignature[:]) != expectedSignature {
+		t.Errorf("Read() header signature = %s, expected %s", string(disk.Header.HeaderSignature[:]), expectedSignature)
 	}
 
 	if disk.Header.FormatRevision != 0 {
@@ -698,6 +658,179 @@ func TestRead_SampleFile(t *testing.T) {
 	}
 }
 
+// testRoundTripSampleFile is a parameterized helper for round-trip testing sample files
+func testRoundTripSampleFile(t *testing.T, filename string, writeVersion HFEVersion, skipErrorMsg string) {
+	t.Helper()
+	sampleFile := findSampleFile(t, filename)
+	if sampleFile == "" {
+		return // Test was skipped
+	}
+
+	// Read original file
+	originalDisk, err := Read(sampleFile)
+	if err != nil {
+		// Check if we should skip due to format mismatch
+		if skipErrorMsg != "" && strings.Contains(err.Error(), skipErrorMsg) {
+			t.Skipf("Sample file %s: %s, skipping test", sampleFile, err.Error())
+			return
+		}
+		t.Fatalf("Read() original file error: %v", err)
+	}
+
+	// Write to temporary file
+	tmpFile := filepath.Join(t.TempDir(), "test_roundtrip.hfe")
+	if err := Write(tmpFile, originalDisk, writeVersion); err != nil {
+		t.Fatalf("Write() error: %v", err)
+	}
+
+	// Read back
+	readDisk, err := Read(tmpFile)
+	if err != nil {
+		t.Fatalf("Read() round-trip file error: %v", err)
+	}
+
+	// Compare headers (allowing for padding differences)
+	if !compareHeaders(t, originalDisk.Header, readDisk.Header) {
+		t.Error("Round-trip header mismatch")
+	}
+
+	// Compare tracks
+	if len(readDisk.Tracks) != len(originalDisk.Tracks) {
+		t.Fatalf("Round-trip track count = %d, expected %d", len(readDisk.Tracks), len(originalDisk.Tracks))
+	}
+
+	// For real files, exact byte-level matches may not be possible due to:
+	// - Different opcode encoding choices
+	// - Track rotation differences
+	// - Padding variations
+	// So we verify that tracks exist and have reasonable data
+	for i := range originalDisk.Tracks {
+		if len(readDisk.Tracks[i].Side0) == 0 && len(originalDisk.Tracks[i].Side0) > 0 {
+			t.Errorf("Round-trip track %d side 0: original had data but written file is empty", i)
+		}
+		if len(readDisk.Tracks[i].Side1) == 0 && len(originalDisk.Tracks[i].Side1) > 0 {
+			t.Errorf("Round-trip track %d side 1: original had data but written file is empty", i)
+		}
+		// Verify that we can at least read and write successfully
+		// (exact byte matches are not required for real-world files)
+	}
+}
+
+// testReadTrack is a parameterized helper for reading and validating track data
+func testReadTrack(t *testing.T, numTracks, numSides uint8, trackDataSize int, version HFEVersion) {
+	t.Helper()
+	disk := createTestDisk(numTracks, numSides, trackDataSize)
+	tmpFile := filepath.Join(t.TempDir(), "test_track.hfe")
+
+	if err := Write(tmpFile, disk, version); err != nil {
+		t.Fatalf("Write() error: %v", err)
+	}
+
+	readDisk, err := Read(tmpFile)
+	if err != nil {
+		t.Fatalf("Read() error: %v", err)
+	}
+
+	if len(readDisk.Tracks) != int(numTracks) {
+		t.Fatalf("Read() expected %d track(s), got %d", numTracks, len(readDisk.Tracks))
+	}
+
+	for i := 0; i < int(numTracks); i++ {
+		if len(readDisk.Tracks[i].Side0) == 0 {
+			t.Errorf("Read() track %d side 0 is empty", i)
+		}
+		if numSides > 1 {
+			if len(readDisk.Tracks[i].Side1) == 0 {
+				t.Errorf("Read() track %d side 1 is empty", i)
+			}
+		} else {
+			if len(readDisk.Tracks[i].Side1) != 0 {
+				t.Errorf("Read() single-side track %d should have empty side 1", i)
+			}
+		}
+	}
+}
+
+// testWriteReadDisk is a parameterized helper for write/read verification pattern
+// verifyFunc is optional - if nil, only basic verification is performed
+func testWriteReadDisk(t *testing.T, disk *Disk, version HFEVersion, verifyFunc func(*testing.T, *Disk, *Disk)) {
+	t.Helper()
+	tmpFile := filepath.Join(t.TempDir(), "test_write_read.hfe")
+
+	if err := Write(tmpFile, disk, version); err != nil {
+		t.Fatalf("Write() error: %v", err)
+	}
+
+	// Verify file exists
+	if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
+		t.Fatalf("Write() file was not created")
+	}
+
+	// Read it back
+	readDisk, err := Read(tmpFile)
+	if err != nil {
+		t.Fatalf("Read() error: %v", err)
+	}
+
+	// Call custom verification function if provided
+	if verifyFunc != nil {
+		verifyFunc(t, disk, readDisk)
+	}
+}
+
+// testWriteV1Format is a parameterized helper for v1 format write/read tests
+func testWriteV1Format(t *testing.T, numTracks, numSides uint8, trackDataSize int) {
+	t.Helper()
+	disk := createTestDisk(numTracks, numSides, trackDataSize)
+	tmpFile := filepath.Join(t.TempDir(), "test_v1.hfe")
+
+	if err := Write(tmpFile, disk, HFEVersion1); err != nil {
+		t.Fatalf("Write() v1 error: %v", err)
+	}
+
+	// Verify file exists
+	if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
+		t.Fatalf("Write() v1 file was not created")
+	}
+
+	// Read it back and verify signature
+	readDisk, err := Read(tmpFile)
+	if err != nil {
+		t.Fatalf("Read() v1 file error: %v", err)
+	}
+
+	// Verify signature is HXCPICFE
+	if string(readDisk.Header.HeaderSignature[:]) != HFEv1Signature {
+		t.Errorf("Write() v1 signature = %s, expected %s", string(readDisk.Header.HeaderSignature[:]), HFEv1Signature)
+	}
+
+	// Verify format revision is 0
+	if readDisk.Header.FormatRevision != 0 {
+		t.Errorf("Write() v1 format revision = %d, expected 0", readDisk.Header.FormatRevision)
+	}
+
+	// Verify track data exists
+	if len(readDisk.Tracks) != int(numTracks) {
+		t.Errorf("Write() v1 track count = %d, expected %d", len(readDisk.Tracks), numTracks)
+	}
+
+	// Verify track data based on number of sides
+	for i, track := range readDisk.Tracks {
+		if len(track.Side0) == 0 {
+			t.Errorf("Write() v1 track %d side 0 is empty", i)
+		}
+		if numSides > 1 {
+			if len(track.Side1) == 0 {
+				t.Errorf("Write() v1 track %d side 1 is empty", i)
+			}
+		}
+	}
+}
+
+func TestRead_SampleFile(t *testing.T) {
+	testReadSampleFile(t, "fat12v3.hfe", HFEv3Signature, "invalid HFE v3 signature")
+}
+
 func TestRead_NonExistentFile(t *testing.T) {
 	_, err := Read("nonexistent_file.hfe")
 	if err == nil {
@@ -709,32 +842,17 @@ func TestRead_NonExistentFile(t *testing.T) {
 
 func TestWrite_ValidDisk(t *testing.T) {
 	disk := createTestDisk(2, 2, 512)
-	tmpFile := filepath.Join(t.TempDir(), "test_write.hfe")
+	testWriteReadDisk(t, disk, HFEVersion3, func(t *testing.T, original, read *Disk) {
+		// Compare headers (excluding TrackListOffset which may differ)
+		if !compareHeaders(t, original.Header, read.Header) {
+			t.Error("Write() header mismatch")
+		}
 
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
-	}
-
-	// Verify file exists
-	if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
-		t.Fatalf("Write() file was not created")
-	}
-
-	// Read it back and verify
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() error: %v", err)
-	}
-
-	// Compare headers (excluding TrackListOffset which may differ)
-	if !compareHeaders(t, disk.Header, readDisk.Header) {
-		t.Error("Write() header mismatch")
-	}
-
-	// Verify track count
-	if len(readDisk.Tracks) != len(disk.Tracks) {
-		t.Errorf("Write() track count = %d, expected %d", len(readDisk.Tracks), len(disk.Tracks))
-	}
+		// Verify track count
+		if len(read.Tracks) != len(original.Tracks) {
+			t.Errorf("Write() track count = %d, expected %d", len(read.Tracks), len(original.Tracks))
+		}
+	})
 }
 
 func TestWrite_HeaderPadding(t *testing.T) {
@@ -804,227 +922,15 @@ func TestWrite_TrackListPadding(t *testing.T) {
 // Test 8: Round-Trip Tests
 
 func TestRoundTrip_SampleFile(t *testing.T) {
-	// Get absolute path to ensure we find the file
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get working directory: %v", err)
-	}
-
-	// Try multiple possible locations
-	possiblePaths := []string{
-		filepath.Join(wd, "testdata", "fat12v3.hfe"),
-		filepath.Join(wd, "..", "testdata", "fat12v3.hfe"),
-		"testdata/fat12v3.hfe",
-	}
-
-	var sampleFile string
-	for _, path := range possiblePaths {
-		if _, err := os.Stat(path); err == nil {
-			sampleFile = path
-			break
-		}
-	}
-
-	if sampleFile == "" {
-		t.Skipf("Sample file fat12v3.hfe not found in any of: %v", possiblePaths)
-		return
-	}
-
-	// Read original file
-	originalDisk, err := Read(sampleFile)
-	if err != nil {
-		// If the file is not HFE v3 format, skip the test
-		if err.Error() == "invalid HFE v3 signature" {
-			t.Skipf("Sample file %s is not HFE v3 format (may be v1), skipping test", sampleFile)
-			return
-		}
-		t.Fatalf("Read() original file error: %v", err)
-	}
-
-	// Write to temporary file
-	tmpFile := filepath.Join(t.TempDir(), "test_roundtrip.hfe")
-	if err := Write(tmpFile, originalDisk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
-	}
-
-	// Read back
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() round-trip file error: %v", err)
-	}
-
-	// Compare headers (allowing for padding differences)
-	if !compareHeaders(t, originalDisk.Header, readDisk.Header) {
-		t.Error("Round-trip header mismatch")
-	}
-
-	// Compare tracks
-	if len(readDisk.Tracks) != len(originalDisk.Tracks) {
-		t.Fatalf("Round-trip track count = %d, expected %d", len(readDisk.Tracks), len(originalDisk.Tracks))
-	}
-
-	// For real files, exact byte-level matches may not be possible due to:
-	// - Different opcode encoding choices
-	// - Track rotation differences
-	// - Padding variations
-	// So we verify that tracks exist and have reasonable data
-	for i := range originalDisk.Tracks {
-		if len(readDisk.Tracks[i].Side0) == 0 && len(originalDisk.Tracks[i].Side0) > 0 {
-			t.Errorf("Round-trip track %d side 0: original had data but written file is empty", i)
-		}
-		if len(readDisk.Tracks[i].Side1) == 0 && len(originalDisk.Tracks[i].Side1) > 0 {
-			t.Errorf("Round-trip track %d side 1: original had data but written file is empty", i)
-		}
-		// Verify that we can at least read and write successfully
-		// (exact byte matches are not required for real-world files)
-	}
+	testRoundTripSampleFile(t, "fat12v3.hfe", HFEVersion3, "invalid HFE v3 signature")
 }
 
 func TestRead_SampleFileV1(t *testing.T) {
-	// Get absolute path to ensure we find the file
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get working directory: %v", err)
-	}
-
-	// Try multiple possible locations
-	possiblePaths := []string{
-		filepath.Join(wd, "testdata", "fat12v1.hfe"),
-		filepath.Join(wd, "..", "testdata", "fat12v1.hfe"),
-		"testdata/fat12v1.hfe",
-	}
-
-	var sampleFile string
-	for _, path := range possiblePaths {
-		if _, err := os.Stat(path); err == nil {
-			sampleFile = path
-			break
-		}
-	}
-
-	if sampleFile == "" {
-		t.Skipf("Sample file fat12v1.hfe not found in any of: %v", possiblePaths)
-		return
-	}
-
-	disk, err := Read(sampleFile)
-	if err != nil {
-		// If the file is not HFE v1 format, skip the test
-		if strings.Contains(err.Error(), "invalid HFE") {
-			t.Skipf("Sample file %s is not HFE v1 format (may be v3), skipping test", sampleFile)
-			return
-		}
-		t.Fatalf("Read() error: %v", err)
-	}
-
-	// Verify header
-	if string(disk.Header.HeaderSignature[:]) != HFEv1Signature {
-		t.Errorf("Read() header signature = %s, expected %s", string(disk.Header.HeaderSignature[:]), HFEv1Signature)
-	}
-
-	if disk.Header.FormatRevision != 0 {
-		t.Errorf("Read() format revision = %d, expected 0", disk.Header.FormatRevision)
-	}
-
-	if disk.Header.NumberOfTrack == 0 {
-		t.Error("Read() number of tracks is zero")
-	}
-
-	if disk.Header.NumberOfSide == 0 {
-		t.Error("Read() number of sides is zero")
-	}
-
-	// Verify tracks
-	if len(disk.Tracks) != int(disk.Header.NumberOfTrack) {
-		t.Errorf("Read() number of tracks = %d, expected %d", len(disk.Tracks), disk.Header.NumberOfTrack)
-	}
-
-	// Verify track data is non-empty
-	for i, track := range disk.Tracks {
-		if len(track.Side0) == 0 {
-			t.Errorf("Read() track %d side 0 is empty", i)
-		}
-		if disk.Header.NumberOfSide > 1 && len(track.Side1) == 0 {
-			t.Errorf("Read() track %d side 1 is empty", i)
-		}
-	}
+	testReadSampleFile(t, "fat12v1.hfe", HFEv1Signature, "invalid HFE")
 }
 
 func TestRoundTrip_SampleFileV1(t *testing.T) {
-	// Get absolute path to ensure we find the file
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get working directory: %v", err)
-	}
-
-	// Try multiple possible locations
-	possiblePaths := []string{
-		filepath.Join(wd, "testdata", "fat12v1.hfe"),
-		filepath.Join(wd, "..", "testdata", "fat12v1.hfe"),
-		"testdata/fat12v1.hfe",
-	}
-
-	var sampleFile string
-	for _, path := range possiblePaths {
-		if _, err := os.Stat(path); err == nil {
-			sampleFile = path
-			break
-		}
-	}
-
-	if sampleFile == "" {
-		t.Skipf("Sample file fat12v1.hfe not found in any of: %v", possiblePaths)
-		return
-	}
-
-	// Read original file
-	originalDisk, err := Read(sampleFile)
-	if err != nil {
-		// If the file is not HFE v1 format, skip the test
-		if strings.Contains(err.Error(), "invalid HFE") {
-			t.Skipf("Sample file %s is not HFE v1 format (may be v3), skipping test", sampleFile)
-			return
-		}
-		t.Fatalf("Read() original file error: %v", err)
-	}
-
-	// Write to temporary file (use HFEVersion1 for v1 files)
-	tmpFile := filepath.Join(t.TempDir(), "test_roundtrip_v1.hfe")
-	if err := Write(tmpFile, originalDisk, HFEVersion1); err != nil {
-		t.Fatalf("Write() error: %v", err)
-	}
-
-	// Read back
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() round-trip file error: %v", err)
-	}
-
-	// Compare headers (allowing for padding differences)
-	if !compareHeaders(t, originalDisk.Header, readDisk.Header) {
-		t.Error("Round-trip header mismatch")
-	}
-
-	// Compare tracks
-	if len(readDisk.Tracks) != len(originalDisk.Tracks) {
-		t.Fatalf("Round-trip track count = %d, expected %d", len(readDisk.Tracks), len(originalDisk.Tracks))
-	}
-
-	// For real files, exact byte-level matches may not be possible due to:
-	// - Different opcode encoding choices
-	// - Track rotation differences
-	// - Padding variations
-	// So we verify that tracks exist and have reasonable data
-	for i := range originalDisk.Tracks {
-		if len(readDisk.Tracks[i].Side0) == 0 && len(originalDisk.Tracks[i].Side0) > 0 {
-			t.Errorf("Round-trip track %d side 0: original had data but written file is empty", i)
-		}
-		if len(readDisk.Tracks[i].Side1) == 0 && len(originalDisk.Tracks[i].Side1) > 0 {
-			t.Errorf("Round-trip track %d side 1: original had data but written file is empty", i)
-		}
-		// Verify that we can at least read and write successfully
-		// (exact byte matches are not required for real-world files)
-	}
+	testRoundTripSampleFile(t, "fat12v1.hfe", HFEVersion1, "invalid HFE")
 }
 
 func TestRoundTrip_GeneratedData(t *testing.T) {
@@ -1069,126 +975,70 @@ func TestRoundTrip_GeneratedData(t *testing.T) {
 
 func TestWrite_EmptyTracks(t *testing.T) {
 	disk := createTestDisk(2, 1, 0) // Zero-length track data
-	tmpFile := filepath.Join(t.TempDir(), "test_empty_tracks.hfe")
-
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() with empty tracks error: %v", err)
-	}
-
-	// Should still create a valid file
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() error: %v", err)
-	}
-
-	if len(readDisk.Tracks) != 2 {
-		t.Errorf("Read() track count = %d, expected 2", len(readDisk.Tracks))
-	}
+	testWriteReadDisk(t, disk, HFEVersion3, func(t *testing.T, original, read *Disk) {
+		if len(read.Tracks) != 2 {
+			t.Errorf("Read() track count = %d, expected 2", len(read.Tracks))
+		}
+	})
 }
 
 func TestWrite_SingleTrack(t *testing.T) {
 	disk := createTestDisk(1, 1, 256)
-	tmpFile := filepath.Join(t.TempDir(), "test_single_track.hfe")
-
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
-	}
-
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() error: %v", err)
-	}
-
-	if len(readDisk.Tracks) != 1 {
-		t.Errorf("Read() track count = %d, expected 1", len(readDisk.Tracks))
-	}
+	testWriteReadDisk(t, disk, HFEVersion3, func(t *testing.T, original, read *Disk) {
+		if len(read.Tracks) != 1 {
+			t.Errorf("Read() track count = %d, expected 1", len(read.Tracks))
+		}
+	})
 }
 
 func TestWrite_TrackLengthBoundary(t *testing.T) {
 	// Test track at exactly 512-byte boundary (256 bytes per side)
 	disk := createTestDisk(1, 2, 256)
-	tmpFile := filepath.Join(t.TempDir(), "test_boundary.hfe")
-
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
-	}
-
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() error: %v", err)
-	}
-
-	// Verify track was written correctly
-	if len(readDisk.Tracks) != 1 {
-		t.Errorf("Read() track count = %d, expected 1", len(readDisk.Tracks))
-	}
+	testWriteReadDisk(t, disk, HFEVersion3, func(t *testing.T, original, read *Disk) {
+		if len(read.Tracks) != 1 {
+			t.Errorf("Read() track count = %d, expected 1", len(read.Tracks))
+		}
+	})
 }
 
 func TestWrite_VeryLongTrack(t *testing.T) {
 	// Test track requiring multiple 512-byte blocks
 	disk := createTestDisk(1, 1, 2048) // 2048 bytes = 4 blocks per side
-	tmpFile := filepath.Join(t.TempDir(), "test_long_track.hfe")
-
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
-	}
-
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() error: %v", err)
-	}
-
-	if len(readDisk.Tracks) != 1 {
-		t.Errorf("Read() track count = %d, expected 1", len(readDisk.Tracks))
-	}
+	testWriteReadDisk(t, disk, HFEVersion3, func(t *testing.T, original, read *Disk) {
+		if len(read.Tracks) != 1 {
+			t.Errorf("Read() track count = %d, expected 1", len(read.Tracks))
+		}
+	})
 }
 
 func TestWrite_SingleSideDisk(t *testing.T) {
 	disk := createTestDisk(2, 1, 256)
-	tmpFile := filepath.Join(t.TempDir(), "test_single_side.hfe")
-
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
-	}
-
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() error: %v", err)
-	}
-
-	if readDisk.Header.NumberOfSide != 1 {
-		t.Errorf("Read() number of sides = %d, expected 1", readDisk.Header.NumberOfSide)
-	}
-
-	for i, track := range readDisk.Tracks {
-		if len(track.Side1) != 0 {
-			t.Errorf("Read() track %d side 1 should be empty for single-side disk", i)
+	testWriteReadDisk(t, disk, HFEVersion3, func(t *testing.T, original, read *Disk) {
+		if read.Header.NumberOfSide != 1 {
+			t.Errorf("Read() number of sides = %d, expected 1", read.Header.NumberOfSide)
 		}
-	}
+
+		for i, track := range read.Tracks {
+			if len(track.Side1) != 0 {
+				t.Errorf("Read() track %d side 1 should be empty for single-side disk", i)
+			}
+		}
+	})
 }
 
 func TestWrite_DoubleSideDisk(t *testing.T) {
 	disk := createTestDisk(2, 2, 256)
-	tmpFile := filepath.Join(t.TempDir(), "test_double_side.hfe")
-
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
-	}
-
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() error: %v", err)
-	}
-
-	if readDisk.Header.NumberOfSide != 2 {
-		t.Errorf("Read() number of sides = %d, expected 2", readDisk.Header.NumberOfSide)
-	}
-
-	for i, track := range readDisk.Tracks {
-		if len(track.Side1) == 0 {
-			t.Errorf("Read() track %d side 1 is empty for double-side disk", i)
+	testWriteReadDisk(t, disk, HFEVersion3, func(t *testing.T, original, read *Disk) {
+		if read.Header.NumberOfSide != 2 {
+			t.Errorf("Read() number of sides = %d, expected 2", read.Header.NumberOfSide)
 		}
-	}
+
+		for i, track := range read.Tracks {
+			if len(track.Side1) == 0 {
+				t.Errorf("Read() track %d side 1 is empty for double-side disk", i)
+			}
+		}
+	})
 }
 
 // Test 10: Constants and Type Tests
@@ -1326,66 +1176,11 @@ func TestWriteBits_Wrapping(t *testing.T) {
 // Test 11: HFE v1 Format Tests
 
 func TestWriteV1SingleSide(t *testing.T) {
-	disk := createTestDisk(1, 1, 256)
-	tmpFile := filepath.Join(t.TempDir(), "test_v1_single.hfe")
-
-	if err := Write(tmpFile, disk, HFEVersion1); err != nil {
-		t.Fatalf("Write() v1 error: %v", err)
-	}
-
-	// Verify file exists
-	if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
-		t.Fatalf("Write() v1 file was not created")
-	}
-
-	// Read it back and verify signature
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() v1 file error: %v", err)
-	}
-
-	// Verify signature is HXCPICFE
-	if string(readDisk.Header.HeaderSignature[:]) != HFEv1Signature {
-		t.Errorf("Write() v1 signature = %s, expected %s", string(readDisk.Header.HeaderSignature[:]), HFEv1Signature)
-	}
-
-	// Verify format revision is 0
-	if readDisk.Header.FormatRevision != 0 {
-		t.Errorf("Write() v1 format revision = %d, expected 0", readDisk.Header.FormatRevision)
-	}
-
-	// Verify track data exists
-	if len(readDisk.Tracks) != 1 {
-		t.Errorf("Write() v1 track count = %d, expected 1", len(readDisk.Tracks))
-	}
+	testWriteV1Format(t, 1, 1, 256)
 }
 
 func TestWriteV1DoubleSide(t *testing.T) {
-	disk := createTestDisk(1, 2, 256)
-	tmpFile := filepath.Join(t.TempDir(), "test_v1_double.hfe")
-
-	if err := Write(tmpFile, disk, HFEVersion1); err != nil {
-		t.Fatalf("Write() v1 error: %v", err)
-	}
-
-	// Read it back and verify
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() v1 file error: %v", err)
-	}
-
-	// Verify signature
-	if string(readDisk.Header.HeaderSignature[:]) != HFEv1Signature {
-		t.Errorf("Write() v1 signature = %s, expected %s", string(readDisk.Header.HeaderSignature[:]), HFEv1Signature)
-	}
-
-	// Verify both sides have data
-	if len(readDisk.Tracks[0].Side0) == 0 {
-		t.Error("Write() v1 track side 0 is empty")
-	}
-	if len(readDisk.Tracks[0].Side1) == 0 {
-		t.Error("Write() v1 track side 1 is empty")
-	}
+	testWriteV1Format(t, 1, 2, 256)
 }
 
 func TestWrite_RejectV2(t *testing.T) {
