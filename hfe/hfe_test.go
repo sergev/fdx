@@ -637,9 +637,9 @@ func TestRead_SampleFile(t *testing.T) {
 
 	// Try multiple possible locations
 	possiblePaths := []string{
-		filepath.Join(wd, "testdata", "fat12.hfe"),
-		filepath.Join(wd, "..", "testdata", "fat12.hfe"),
-		"testdata/fat12.hfe",
+		filepath.Join(wd, "testdata", "fat12v3.hfe"),
+		filepath.Join(wd, "..", "testdata", "fat12v3.hfe"),
+		"testdata/fat12v3.hfe",
 	}
 
 	var sampleFile string
@@ -651,7 +651,7 @@ func TestRead_SampleFile(t *testing.T) {
 	}
 
 	if sampleFile == "" {
-		t.Skipf("Sample file fat12.hfe not found in any of: %v", possiblePaths)
+		t.Skipf("Sample file fat12v3.hfe not found in any of: %v", possiblePaths)
 		return
 	}
 
@@ -812,9 +812,9 @@ func TestRoundTrip_SampleFile(t *testing.T) {
 
 	// Try multiple possible locations
 	possiblePaths := []string{
-		filepath.Join(wd, "testdata", "fat12.hfe"),
-		filepath.Join(wd, "..", "testdata", "fat12.hfe"),
-		"testdata/fat12.hfe",
+		filepath.Join(wd, "testdata", "fat12v3.hfe"),
+		filepath.Join(wd, "..", "testdata", "fat12v3.hfe"),
+		"testdata/fat12v3.hfe",
 	}
 
 	var sampleFile string
@@ -826,7 +826,7 @@ func TestRoundTrip_SampleFile(t *testing.T) {
 	}
 
 	if sampleFile == "" {
-		t.Skipf("Sample file fat12.hfe not found in any of: %v", possiblePaths)
+		t.Skipf("Sample file fat12v3.hfe not found in any of: %v", possiblePaths)
 		return
 	}
 
