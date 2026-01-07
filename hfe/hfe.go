@@ -8,18 +8,30 @@ import (
 	"os"
 )
 
-// Constants for HFE v3 format
+// HFEVersion represents the HFE file format version
+type HFEVersion int
+
 const (
+	HFEVersion1 HFEVersion = 1
+	HFEVersion2 HFEVersion = 2
+	HFEVersion3 HFEVersion = 3
+)
+
+// Constants for HFE format signatures
+const (
+	// Signature for HFE v1 and v2 format
+	HFEv1Signature = "HXCPICFE"
+	HFEv2Signature = "HXCPICFE" // Same signature, different revision
 	// Signature for HFE v3 format
 	HFEv3Signature = "HXCHFEV3"
 
-	// Opcode constants
+	// Opcode constants (used in v3)
 	OPCODE_MASK       = 0xF0
-	NOP_OPCODE       = 0xF0
-	SETINDEX_OPCODE  = 0xF1
+	NOP_OPCODE        = 0xF0
+	SETINDEX_OPCODE   = 0xF1
 	SETBITRATE_OPCODE = 0xF2
-	SKIPBITS_OPCODE  = 0xF3
-	RAND_OPCODE      = 0xF4
+	SKIPBITS_OPCODE   = 0xF3
+	RAND_OPCODE       = 0xF4
 
 	// Floppy emulator frequency (Hz)
 	FLOPPYEMUFREQ = 36000000
@@ -55,22 +67,22 @@ const (
 
 // Header represents the HFE v3 file header
 type Header struct {
-	HeaderSignature      [8]byte
-	FormatRevision       uint8
-	NumberOfTrack        uint8
-	NumberOfSide         uint8
-	TrackEncoding        uint8
-	BitRate              uint16 // in kB/s
-	FloppyRPM            uint16
-	FloppyInterfaceMode  uint8
-	WriteProtected       uint8
-	TrackListOffset      uint16 // in 512-byte blocks
-	WriteAllowed         uint8
-	SingleStep           uint8
-	Track0S0AltEncoding  uint8
-	Track0S0Encoding      uint8
-	Track0S1AltEncoding  uint8
-	Track0S1Encoding      uint8
+	HeaderSignature     [8]byte
+	FormatRevision      uint8
+	NumberOfTrack       uint8
+	NumberOfSide        uint8
+	TrackEncoding       uint8
+	BitRate             uint16 // in kB/s
+	FloppyRPM           uint16
+	FloppyInterfaceMode uint8
+	WriteProtected      uint8
+	TrackListOffset     uint16 // in 512-byte blocks
+	WriteAllowed        uint8
+	SingleStep          uint8
+	Track0S0AltEncoding uint8
+	Track0S0Encoding    uint8
+	Track0S1AltEncoding uint8
+	Track0S1Encoding    uint8
 }
 
 // TrackHeader represents a track offset entry in the track list
@@ -151,7 +163,11 @@ func bitCopy(dst []byte, dstOff int, src []byte, srcOff int, size int) int {
 	return dstOff
 }
 
-// Read reads an HFE v3 file and returns a Disk structure
+// Read reads an HFE file (v1, v2, or v3) and returns a Disk structure
+// Supports all HFE format versions:
+//   - v1: signature "HXCPICFE", format revision 0
+//   - v2: signature "HXCPICFE", format revision 1
+//   - v3: signature "HXCHFEV3", format revision 0
 func Read(filename string) (*Disk, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -166,14 +182,26 @@ func Read(filename string) (*Disk, error) {
 		return nil, fmt.Errorf("failed to read header: %w", err)
 	}
 
-	// Validate signature
-	if string(disk.Header.HeaderSignature[:]) != HFEv3Signature {
-		return nil, errors.New("invalid HFE v3 signature")
+	// Validate signature - support v1/v2 (HXCPICFE) and v3 (HXCHFEV3)
+	sig := string(disk.Header.HeaderSignature[:])
+	isV1V2 := sig == HFEv1Signature || sig == HFEv2Signature
+	isV3 := sig == HFEv3Signature
+
+	if !isV1V2 && !isV3 {
+		return nil, fmt.Errorf("invalid HFE signature: %s (expected %s, %s, or %s)", sig, HFEv1Signature, HFEv2Signature, HFEv3Signature)
 	}
 
-	// Validate format revision
-	if disk.Header.FormatRevision != 0 {
-		return nil, fmt.Errorf("unsupported format revision: %d", disk.Header.FormatRevision)
+	// Validate format revision based on signature
+	if isV3 {
+		// v3: format revision must be 0
+		if disk.Header.FormatRevision != 0 {
+			return nil, fmt.Errorf("invalid HFE v3 format revision: %d (expected 0)", disk.Header.FormatRevision)
+		}
+	} else if isV1V2 {
+		// v1/v2: format revision should be 0 for v1, 1 for v2
+		if disk.Header.FormatRevision > 1 {
+			return nil, fmt.Errorf("invalid HFE v1/v2 format revision: %d (expected 0 or 1)", disk.Header.FormatRevision)
+		}
 	}
 
 	// Validate basic fields
@@ -197,9 +225,12 @@ func Read(filename string) (*Disk, error) {
 	// Initialize tracks
 	disk.Tracks = make([]TrackData, disk.Header.NumberOfTrack)
 
+	// Determine if we need to process opcodes (only for v3)
+	shouldProcessOpcodes := isV3
+
 	// Read each track
 	for i := range trackHeaders {
-		trackData, err := readTrack(file, &trackHeaders[i], disk.Header.NumberOfSide)
+		trackData, err := readTrack(file, &trackHeaders[i], disk.Header.NumberOfSide, shouldProcessOpcodes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read track %d: %w", i, err)
 		}
@@ -210,7 +241,8 @@ func Read(filename string) (*Disk, error) {
 }
 
 // readTrack reads a single track from the file
-func readTrack(file *os.File, th *TrackHeader, numSides uint8) (*TrackData, error) {
+// shouldProcessOpcodes indicates whether to process HFEv3 opcodes (true for v3, false for v1/v2)
+func readTrack(file *os.File, th *TrackHeader, numSides uint8, shouldProcessOpcodes bool) (*TrackData, error) {
 	// Calculate track length (rounded up to 512-byte boundary)
 	trackLen := int(th.TrackLen)
 	if trackLen&0x1FF != 0 {
@@ -243,17 +275,28 @@ func readTrack(file *os.File, th *TrackHeader, numSides uint8) (*TrackData, erro
 		}
 	}
 
-	// Process opcodes for each side
-	side0Bits, err := processOpcodes(side0Data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to process opcodes for side 0: %w", err)
-	}
+	// Process opcodes for each side (only for v3 format)
+	var side0Bits, side1Bits []byte
+	var err error
 
-	var side1Bits []byte
-	if numSides > 1 {
-		side1Bits, err = processOpcodes(side1Data)
+	if shouldProcessOpcodes {
+		// v3 format: process opcodes
+		side0Bits, err = processOpcodes(side0Data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to process opcodes for side 1: %w", err)
+			return nil, fmt.Errorf("failed to process opcodes for side 0: %w", err)
+		}
+
+		if numSides > 1 {
+			side1Bits, err = processOpcodes(side1Data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to process opcodes for side 1: %w", err)
+			}
+		}
+	} else {
+		// v1/v2 format: use raw data directly (no opcode processing)
+		side0Bits = side0Data
+		if numSides > 1 {
+			side1Bits = side1Data
 		}
 	}
 
@@ -366,8 +409,14 @@ func processOpcodes(data []byte) ([]byte, error) {
 	return result, nil
 }
 
-// Write writes a Disk structure to an HFE v3 file
-func Write(filename string, disk *Disk) error {
+// Write writes a Disk structure to an HFE file
+// version specifies the HFE format version (1, 2, or 3)
+func Write(filename string, disk *Disk, version HFEVersion) error {
+	// Validate version
+	if version != HFEVersion1 && version != HFEVersion2 && version != HFEVersion3 {
+		return fmt.Errorf("invalid HFE version: %d (must be 1, 2, or 3)", version)
+	}
+
 	file, err := os.Create(filename)
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
@@ -376,8 +425,19 @@ func Write(filename string, disk *Disk) error {
 
 	// Prepare header
 	header := disk.Header
-	copy(header.HeaderSignature[:], HFEv3Signature)
-	header.FormatRevision = 0
+
+	// Set header signature and format revision based on version
+	switch version {
+	case HFEVersion1:
+		copy(header.HeaderSignature[:], HFEv1Signature)
+		header.FormatRevision = 0
+	case HFEVersion2:
+		copy(header.HeaderSignature[:], HFEv2Signature)
+		header.FormatRevision = 1
+	case HFEVersion3:
+		copy(header.HeaderSignature[:], HFEv3Signature)
+		header.FormatRevision = 0
+	}
 	header.TrackListOffset = 1
 
 	// Write header (512 bytes, padded with 0xFF)
@@ -419,34 +479,47 @@ func Write(filename string, disk *Disk) error {
 
 	trackPos := uint16(header.TrackListOffset + 1) // Start after track list block
 
-	// First pass: encode all tracks and calculate exact encoded lengths
-	// This matches the legacy implementation which encodes first, then calculates lengths
-	type encodedTrack struct {
+	// Prepare track data based on version
+	type trackData struct {
 		side0 []byte
 		side1 []byte
 	}
-	encodedTracks := make([]encodedTrack, len(disk.Tracks))
+	tracks := make([]trackData, len(disk.Tracks))
 	bitrateKbps := disk.Header.BitRate
-	for i, track := range disk.Tracks {
-		encodedTracks[i].side0 = encodeOpcodes(track.Side0, bitrateKbps)
-		if disk.Header.NumberOfSide > 1 {
-			encodedTracks[i].side1 = encodeOpcodes(track.Side1, bitrateKbps)
-		} else {
-			encodedTracks[i].side1 = encodedTracks[i].side0
+
+	if version == HFEVersion3 {
+		// For v3: encode tracks with opcodes
+		for i, track := range disk.Tracks {
+			tracks[i].side0 = encodeOpcodes(track.Side0, bitrateKbps)
+			if disk.Header.NumberOfSide > 1 {
+				tracks[i].side1 = encodeOpcodes(track.Side1, bitrateKbps)
+			} else {
+				tracks[i].side1 = tracks[i].side0
+			}
+		}
+	} else {
+		// For v1/v2: use raw track data (no opcode encoding)
+		for i, track := range disk.Tracks {
+			tracks[i].side0 = track.Side0
+			if disk.Header.NumberOfSide > 1 {
+				tracks[i].side1 = track.Side1
+			} else {
+				tracks[i].side1 = tracks[i].side0
+			}
 		}
 	}
 
-	// Second pass: calculate track offsets using exact encoded lengths
+	// Calculate track offsets using track lengths
 	trackHeaders := make([]TrackHeader, len(disk.Tracks))
-	for i := range encodedTracks {
-		// Calculate maximum encoded length (max of both sides)
-		maxEncodedLen := len(encodedTracks[i].side0)
-		if len(encodedTracks[i].side1) > maxEncodedLen {
-			maxEncodedLen = len(encodedTracks[i].side1)
+	for i := range tracks {
+		// Calculate maximum length (max of both sides)
+		maxLen := len(tracks[i].side0)
+		if len(tracks[i].side1) > maxLen {
+			maxLen = len(tracks[i].side1)
 		}
 
-		// Track length is for both sides: bytelen = maxEncodedLen * 2
-		bytelen := maxEncodedLen * 2
+		// Track length is for both sides: bytelen = maxLen * 2
+		bytelen := maxLen * 2
 
 		// Round up to 512-byte boundary
 		trackLen := bytelen
@@ -479,9 +552,17 @@ func Write(filename string, disk *Disk) error {
 		return fmt.Errorf("failed to write track list: %w", err)
 	}
 
-	// Write track data using pre-encoded tracks
-	for i := range encodedTracks {
-		if err := writeEncodedTrack(file, &trackHeaders[i], encodedTracks[i].side0, encodedTracks[i].side1, disk.Header.NumberOfSide); err != nil {
+	// Write track data using appropriate function based on version
+	for i := range tracks {
+		var err error
+		if version == HFEVersion3 {
+			// v3: use opcode-encoded track writer
+			err = writeEncodedTrack(file, &trackHeaders[i], tracks[i].side0, tracks[i].side1, disk.Header.NumberOfSide)
+		} else {
+			// v1/v2: use raw track writer (no opcodes)
+			err = writeRawTrack(file, &trackHeaders[i], tracks[i].side0, tracks[i].side1, disk.Header.NumberOfSide)
+		}
+		if err != nil {
 			return fmt.Errorf("failed to write track %d: %w", i, err)
 		}
 	}
@@ -498,7 +579,7 @@ func encodeOpcodes(data []byte, bitrateKbps uint16) []byte {
 	for _, b := range data {
 		// Escape bytes in opcode range (0xF0-0xFF) except RAND_OPCODE (0xF4)
 		// by XORing with 0x90 (per adjustrand function in legacy code)
-		if (b & OPCODE_MASK) == OPCODE_MASK && b != RAND_OPCODE {
+		if (b&OPCODE_MASK) == OPCODE_MASK && b != RAND_OPCODE {
 			// Escape by XORing with 0x90
 			result = append(result, b^0x90)
 		} else {
@@ -528,6 +609,50 @@ func writeEncodedTrack(file *os.File, th *TrackHeader, encodedSide0, encodedSide
 		copy(side1Buf, encodedSide1)
 		for i := len(encodedSide1); i < len(side1Buf); i++ {
 			side1Buf[i] = NOP_OPCODE
+		}
+	} else {
+		copy(side1Buf, side0Buf)
+	}
+
+	// Interleave side0 and side1 data into track buffer
+	// Side 0: bytes 0-255 of each 512-byte block
+	// Side 1: bytes 256-511 of each 512-byte block
+	trackBuf := make([]byte, trackLen)
+	for k := 0; k < trackLen/BlockSize; k++ {
+		for j := 0; j < 256; j++ {
+			// Head 0
+			trackBuf[k*BlockSize+j] = byteBitsInverter[side0Buf[k*256+j]]
+			// Head 1
+			trackBuf[k*BlockSize+j+256] = byteBitsInverter[side1Buf[k*256+j]]
+		}
+	}
+
+	// Write to file
+	if _, err := file.Write(trackBuf); err != nil {
+		return fmt.Errorf("failed to write track data: %w", err)
+	}
+
+	return nil
+}
+
+// writeRawTrack writes raw track data to the file (for v1/v2 format, no opcodes)
+func writeRawTrack(file *os.File, th *TrackHeader, side0, side1 []byte, numSides uint8) error {
+	trackLen := int(th.TrackLen)
+
+	// Allocate buffers for each side (padded to trackLen/2)
+	side0Buf := make([]byte, trackLen/2)
+	side1Buf := make([]byte, trackLen/2)
+
+	// Copy raw data and pad with 0xFF (not NOP opcodes)
+	copy(side0Buf, side0)
+	for i := len(side0); i < len(side0Buf); i++ {
+		side0Buf[i] = 0xFF
+	}
+
+	if numSides > 1 {
+		copy(side1Buf, side1)
+		for i := len(side1); i < len(side1Buf); i++ {
+			side1Buf[i] = 0xFF
 		}
 	} else {
 		copy(side1Buf, side0Buf)
