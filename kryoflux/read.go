@@ -629,7 +629,7 @@ func (c *Client) Read(filename string) error {
 
 	// Write HFE file
 	fmt.Printf("Writing HFE file...\n")
-	err = hfe.Write(filename, disk, hfe.HFEVersion3)
+	err = hfe.Write(filename, disk, hfe.HFEVersion1)
 	if err != nil {
 		return fmt.Errorf("failed to write HFE file: %w", err)
 	}

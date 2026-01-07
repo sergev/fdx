@@ -659,7 +659,7 @@ func TestRead_SampleFile(t *testing.T) {
 	if err != nil {
 		// If the file is not HFE v3 format, skip the test
 		if err.Error() == "invalid HFE v3 signature" {
-			t.Skipf("Sample file %s is not HFE v3 format (may be v1/v2), skipping test", sampleFile)
+			t.Skipf("Sample file %s is not HFE v3 format (may be v1), skipping test", sampleFile)
 			return
 		}
 		t.Fatalf("Read() error: %v", err)
@@ -835,7 +835,7 @@ func TestRoundTrip_SampleFile(t *testing.T) {
 	if err != nil {
 		// If the file is not HFE v3 format, skip the test
 		if err.Error() == "invalid HFE v3 signature" {
-			t.Skipf("Sample file %s is not HFE v3 format (may be v1/v2), skipping test", sampleFile)
+			t.Skipf("Sample file %s is not HFE v3 format (may be v1), skipping test", sampleFile)
 			return
 		}
 		t.Fatalf("Read() original file error: %v", err)
@@ -1176,7 +1176,7 @@ func TestWriteBits_Wrapping(t *testing.T) {
 	// This is a basic check that wrapping occurs
 }
 
-// Test 11: HFE v1/v2 Format Tests
+// Test 11: HFE v1 Format Tests
 
 func TestWriteV1SingleSide(t *testing.T) {
 	disk := createTestDisk(1, 1, 256)
@@ -1241,53 +1241,18 @@ func TestWriteV1DoubleSide(t *testing.T) {
 	}
 }
 
-func TestWriteV2SingleSide(t *testing.T) {
+func TestWrite_RejectV2(t *testing.T) {
+	// Test that Write() rejects v2 version
 	disk := createTestDisk(1, 1, 256)
-	tmpFile := filepath.Join(t.TempDir(), "test_v2_single.hfe")
+	tmpFile := filepath.Join(t.TempDir(), "test_v2_reject.hfe")
 
-	if err := Write(tmpFile, disk, HFEVersion2); err != nil {
-		t.Fatalf("Write() v2 error: %v", err)
+	// Try to write with v2 (should fail)
+	err := Write(tmpFile, disk, HFEVersion(2))
+	if err == nil {
+		t.Fatalf("Write() with v2: expected error, got nil")
 	}
-
-	// Read it back and verify signature
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() v2 file error: %v", err)
-	}
-
-	// Verify signature is HXCPICFE (same as v1)
-	if string(readDisk.Header.HeaderSignature[:]) != HFEv2Signature {
-		t.Errorf("Write() v2 signature = %s, expected %s", string(readDisk.Header.HeaderSignature[:]), HFEv2Signature)
-	}
-
-	// Verify format revision is 1 (different from v1)
-	if readDisk.Header.FormatRevision != 1 {
-		t.Errorf("Write() v2 format revision = %d, expected 1", readDisk.Header.FormatRevision)
-	}
-}
-
-func TestWriteV2DoubleSide(t *testing.T) {
-	disk := createTestDisk(1, 2, 256)
-	tmpFile := filepath.Join(t.TempDir(), "test_v2_double.hfe")
-
-	if err := Write(tmpFile, disk, HFEVersion2); err != nil {
-		t.Fatalf("Write() v2 error: %v", err)
-	}
-
-	// Read it back and verify
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() v2 file error: %v", err)
-	}
-
-	// Verify signature
-	if string(readDisk.Header.HeaderSignature[:]) != HFEv2Signature {
-		t.Errorf("Write() v2 signature = %s, expected %s", string(readDisk.Header.HeaderSignature[:]), HFEv2Signature)
-	}
-
-	// Verify format revision
-	if readDisk.Header.FormatRevision != 1 {
-		t.Errorf("Write() v2 format revision = %d, expected 1", readDisk.Header.FormatRevision)
+	if !strings.Contains(err.Error(), "invalid HFE version") {
+		t.Errorf("Write() with v2: expected error about invalid version, got %v", err)
 	}
 }
 
@@ -1331,30 +1296,89 @@ func TestWriteV1RoundTrip(t *testing.T) {
 	}
 }
 
-func TestWriteV2RoundTrip(t *testing.T) {
-	// Create test disk
-	disk := createTestDisk(2, 2, 512)
-	tmpFile := filepath.Join(t.TempDir(), "test_v2_roundtrip.hfe")
-
-	// Write v2 format
-	if err := Write(tmpFile, disk, HFEVersion2); err != nil {
-		t.Fatalf("Write() v2 error: %v", err)
-	}
-
-	// Read it back
-	readDisk, err := Read(tmpFile)
+func TestRead_RejectV2(t *testing.T) {
+	// Test that Read() rejects v2 format files
+	tmpFile := filepath.Join(t.TempDir(), "test_v2_reject.hfe")
+	file, err := os.Create(tmpFile)
 	if err != nil {
-		t.Fatalf("Read() v2 file error: %v", err)
+		t.Fatalf("Create() error: %v", err)
+	}
+	defer file.Close()
+
+	// Create a v2 format file manually (HXCPICFE signature with revision 1)
+	header := Header{}
+	copy(header.HeaderSignature[:], HFEv1Signature) // Same signature as v1
+	header.FormatRevision = 1                       // But revision 1 indicates v2
+	header.NumberOfTrack = 1
+	header.NumberOfSide = 1
+	header.TrackEncoding = ENC_ISOIBM_MFM
+	header.BitRate = 250
+	header.FloppyRPM = 300
+	header.FloppyInterfaceMode = IFM_IBMPC_DD
+	header.WriteProtected = 0xFF
+	header.TrackListOffset = 1
+	header.WriteAllowed = 0xFF
+	header.SingleStep = 0x00
+	header.Track0S0AltEncoding = 0xFF
+	header.Track0S0Encoding = ENC_ISOIBM_MFM
+	header.Track0S1AltEncoding = 0xFF
+	header.Track0S1Encoding = ENC_ISOIBM_MFM
+
+	// Write header
+	headerBuf := make([]byte, BlockSize)
+	for i := range headerBuf {
+		headerBuf[i] = 0xFF
+	}
+	headerData := make([]byte, 32)
+	copy(headerData[0:8], header.HeaderSignature[:])
+	headerData[8] = header.FormatRevision
+	headerData[9] = header.NumberOfTrack
+	headerData[10] = header.NumberOfSide
+	headerData[11] = header.TrackEncoding
+	binary.LittleEndian.PutUint16(headerData[12:14], header.BitRate)
+	binary.LittleEndian.PutUint16(headerData[14:16], header.FloppyRPM)
+	headerData[16] = header.FloppyInterfaceMode
+	headerData[17] = header.WriteProtected
+	binary.LittleEndian.PutUint16(headerData[18:20], header.TrackListOffset)
+	headerData[20] = header.WriteAllowed
+	headerData[21] = header.SingleStep
+	headerData[22] = header.Track0S0AltEncoding
+	headerData[23] = header.Track0S0Encoding
+	headerData[24] = header.Track0S1AltEncoding
+	headerData[25] = header.Track0S1Encoding
+	copy(headerBuf, headerData)
+	if _, err := file.Write(headerBuf); err != nil {
+		t.Fatalf("Write() header error: %v", err)
 	}
 
-	// Verify format revision is 1
-	if readDisk.Header.FormatRevision != 1 {
-		t.Errorf("Round-trip v2 format revision = %d, expected 1", readDisk.Header.FormatRevision)
+	// Write minimal track list
+	trackListBuf := make([]byte, BlockSize)
+	for i := range trackListBuf {
+		trackListBuf[i] = 0xFF
+	}
+	binary.LittleEndian.PutUint16(trackListBuf[0:2], 2)   // Track offset
+	binary.LittleEndian.PutUint16(trackListBuf[2:4], 512) // Track length
+	if _, err := file.Write(trackListBuf); err != nil {
+		t.Fatalf("Write() track list error: %v", err)
 	}
 
-	// Verify track count
-	if len(readDisk.Tracks) != len(disk.Tracks) {
-		t.Errorf("Round-trip v2 track count = %d, expected %d", len(readDisk.Tracks), len(disk.Tracks))
+	// Write minimal track data
+	trackData := make([]byte, 512)
+	for i := range trackData {
+		trackData[i] = 0xFF
+	}
+	if _, err := file.Write(trackData); err != nil {
+		t.Fatalf("Write() track data error: %v", err)
+	}
+	file.Close()
+
+	// Try to read v2 file (should fail)
+	_, err = Read(tmpFile)
+	if err == nil {
+		t.Fatalf("Read() v2 file: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "v2 format") || !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("Read() v2 file: expected error about v2 not supported, got %v", err)
 	}
 }
 
@@ -1414,33 +1438,12 @@ func TestWriteV1NoOpcodes(t *testing.T) {
 	// Check that padding uses 0xFF, not NOP opcode (0xF0)
 	// Note: We check the padding area, not the actual data area
 	// The actual data may contain any bytes, but padding should be 0xFF
-	// For v1/v2, padding is 0xFF, for v3 it would be 0xF0 (NOP opcode)
+	// For v1, padding is 0xFF, for v3 it would be 0xF0 (NOP opcode)
 	// We'll check the last few bytes which are likely padding
 	for i := len(trackBuf) - 10; i < len(trackBuf); i++ {
 		// Padding should be 0xFF, not 0xF0 (NOP opcode)
 		if trackBuf[i] == NOP_OPCODE {
 			t.Errorf("Write() v1 track data at offset %d contains NOP opcode (0xF0), expected 0xFF padding", i)
 		}
-	}
-}
-
-func TestWriteV2NoOpcodes(t *testing.T) {
-	// Test that v2 format doesn't use opcodes (same as v1)
-	disk := createTestDisk(1, 1, 256)
-	tmpFile := filepath.Join(t.TempDir(), "test_v2_no_opcodes.hfe")
-
-	if err := Write(tmpFile, disk, HFEVersion2); err != nil {
-		t.Fatalf("Write() v2 error: %v", err)
-	}
-
-	// Read raw file and verify format revision
-	readDisk, err := Read(tmpFile)
-	if err != nil {
-		t.Fatalf("Read() v2 file error: %v", err)
-	}
-
-	// Verify format revision is 1
-	if readDisk.Header.FormatRevision != 1 {
-		t.Errorf("Write() v2 format revision = %d, expected 1", readDisk.Header.FormatRevision)
 	}
 }

@@ -13,15 +13,13 @@ type HFEVersion int
 
 const (
 	HFEVersion1 HFEVersion = 1
-	HFEVersion2 HFEVersion = 2
 	HFEVersion3 HFEVersion = 3
 )
 
 // Constants for HFE format signatures
 const (
-	// Signature for HFE v1 and v2 format
+	// Signature for HFE v1 format
 	HFEv1Signature = "HXCPICFE"
-	HFEv2Signature = "HXCPICFE" // Same signature, different revision
 	// Signature for HFE v3 format
 	HFEv3Signature = "HXCHFEV3"
 
@@ -163,11 +161,12 @@ func bitCopy(dst []byte, dstOff int, src []byte, srcOff int, size int) int {
 	return dstOff
 }
 
-// Read reads an HFE file (v1, v2, or v3) and returns a Disk structure
-// Supports all HFE format versions:
+// Read reads an HFE file (v1 or v3) and returns a Disk structure
+// Supports HFE format versions:
 //   - v1: signature "HXCPICFE", format revision 0
-//   - v2: signature "HXCPICFE", format revision 1
 //   - v3: signature "HXCHFEV3", format revision 0
+//
+// v2 format is not supported and will return an error
 func Read(filename string) (*Disk, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -182,13 +181,13 @@ func Read(filename string) (*Disk, error) {
 		return nil, fmt.Errorf("failed to read header: %w", err)
 	}
 
-	// Validate signature - support v1/v2 (HXCPICFE) and v3 (HXCHFEV3)
+	// Validate signature - support v1 (HXCPICFE) and v3 (HXCHFEV3)
 	sig := string(disk.Header.HeaderSignature[:])
-	isV1V2 := sig == HFEv1Signature || sig == HFEv2Signature
+	isV1 := sig == HFEv1Signature
 	isV3 := sig == HFEv3Signature
 
-	if !isV1V2 && !isV3 {
-		return nil, fmt.Errorf("invalid HFE signature: %s (expected %s, %s, or %s)", sig, HFEv1Signature, HFEv2Signature, HFEv3Signature)
+	if !isV1 && !isV3 {
+		return nil, fmt.Errorf("invalid HFE signature: %s (expected %s or %s)", sig, HFEv1Signature, HFEv3Signature)
 	}
 
 	// Validate format revision based on signature
@@ -197,10 +196,14 @@ func Read(filename string) (*Disk, error) {
 		if disk.Header.FormatRevision != 0 {
 			return nil, fmt.Errorf("invalid HFE v3 format revision: %d (expected 0)", disk.Header.FormatRevision)
 		}
-	} else if isV1V2 {
-		// v1/v2: format revision should be 0 for v1, 1 for v2
-		if disk.Header.FormatRevision > 1 {
-			return nil, fmt.Errorf("invalid HFE v1/v2 format revision: %d (expected 0 or 1)", disk.Header.FormatRevision)
+	} else if isV1 {
+		// v1: format revision must be 0
+		// v2 (revision 1) is not supported
+		if disk.Header.FormatRevision == 1 {
+			return nil, fmt.Errorf("HFE v2 format (revision 1) is not supported, only v1 and v3 are supported")
+		}
+		if disk.Header.FormatRevision != 0 {
+			return nil, fmt.Errorf("invalid HFE v1 format revision: %d (expected 0)", disk.Header.FormatRevision)
 		}
 	}
 
@@ -241,7 +244,7 @@ func Read(filename string) (*Disk, error) {
 }
 
 // readTrack reads a single track from the file
-// shouldProcessOpcodes indicates whether to process HFEv3 opcodes (true for v3, false for v1/v2)
+// shouldProcessOpcodes indicates whether to process HFEv3 opcodes (true for v3, false for v1)
 func readTrack(file *os.File, th *TrackHeader, numSides uint8, shouldProcessOpcodes bool) (*TrackData, error) {
 	// Calculate track length (rounded up to 512-byte boundary)
 	trackLen := int(th.TrackLen)
@@ -293,7 +296,7 @@ func readTrack(file *os.File, th *TrackHeader, numSides uint8, shouldProcessOpco
 			}
 		}
 	} else {
-		// v1/v2 format: use raw data directly (no opcode processing)
+		// v1 format: use raw data directly (no opcode processing)
 		side0Bits = side0Data
 		if numSides > 1 {
 			side1Bits = side1Data
@@ -413,8 +416,8 @@ func processOpcodes(data []byte) ([]byte, error) {
 // version specifies the HFE format version (1, 2, or 3)
 func Write(filename string, disk *Disk, version HFEVersion) error {
 	// Validate version
-	if version != HFEVersion1 && version != HFEVersion2 && version != HFEVersion3 {
-		return fmt.Errorf("invalid HFE version: %d (must be 1, 2, or 3)", version)
+	if version != HFEVersion1 && version != HFEVersion3 {
+		return fmt.Errorf("invalid HFE version: %d (must be 1 or 3)", version)
 	}
 
 	file, err := os.Create(filename)
@@ -431,9 +434,6 @@ func Write(filename string, disk *Disk, version HFEVersion) error {
 	case HFEVersion1:
 		copy(header.HeaderSignature[:], HFEv1Signature)
 		header.FormatRevision = 0
-	case HFEVersion2:
-		copy(header.HeaderSignature[:], HFEv2Signature)
-		header.FormatRevision = 1
 	case HFEVersion3:
 		copy(header.HeaderSignature[:], HFEv3Signature)
 		header.FormatRevision = 0
@@ -498,7 +498,7 @@ func Write(filename string, disk *Disk, version HFEVersion) error {
 			}
 		}
 	} else {
-		// For v1/v2: use raw track data (no opcode encoding)
+		// For v1: use raw track data (no opcode encoding)
 		for i, track := range disk.Tracks {
 			tracks[i].side0 = track.Side0
 			if disk.Header.NumberOfSide > 1 {
@@ -559,7 +559,7 @@ func Write(filename string, disk *Disk, version HFEVersion) error {
 			// v3: use opcode-encoded track writer
 			err = writeEncodedTrack(file, &trackHeaders[i], tracks[i].side0, tracks[i].side1, disk.Header.NumberOfSide)
 		} else {
-			// v1/v2: use raw track writer (no opcodes)
+			// v1: use raw track writer (no opcodes)
 			err = writeRawTrack(file, &trackHeaders[i], tracks[i].side0, tracks[i].side1, disk.Header.NumberOfSide)
 		}
 		if err != nil {
@@ -635,7 +635,7 @@ func writeEncodedTrack(file *os.File, th *TrackHeader, encodedSide0, encodedSide
 	return nil
 }
 
-// writeRawTrack writes raw track data to the file (for v1/v2 format, no opcodes)
+// writeRawTrack writes raw track data to the file (for v1 format, no opcodes)
 func writeRawTrack(file *os.File, th *TrackHeader, side0, side1 []byte, numSides uint8) error {
 	trackLen := int(th.TrackLen)
 
