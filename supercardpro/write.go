@@ -42,32 +42,41 @@ func mfmToFluxTransitions(mfmBits []byte, bitRateKhz uint16) ([]uint64, error) {
 	return transitions, nil
 }
 
-// Encode flux transition times into SuperCard Pro flux format.
-// Transitions are relative times in nanoseconds, converted to intervals in 25ns units.
-// Ensure the stream covers at least one full revolution by padding if necessary.
-func encodeFluxToSCP(transitions []uint64, rpm uint16) []byte {
-	var result []byte
+// Extend transitions array to cover a full rotation period.
+// Appends transitions at 2-bitcell intervals until the rotation duration is reached.
+func coverFullRotation(transitions []uint64, bitRateKhz uint16, floppyRPM uint16) []uint64 {
+	// Calculate rotation duration in nanoseconds
+	// Rotation duration = 60 seconds / RPM = 60e9 nanoseconds / RPM
+	rotationDurationNs := uint32(60e9 / float64(floppyRPM))
 
-	if len(transitions) == 0 {
-		// No transitions - generate minimal flux data for one revolution
-		rotationDurationNs := 60e9 / float64(rpm)
-		indexTime25ns := uint32(rotationDurationNs / 25.0)
-		// Use a reasonable interval size
-		intervalSize := uint16(40) // 40 * 25ns = 1 microsecond
-		nrSamples := indexTime25ns / uint32(intervalSize)
-		if nrSamples == 0 {
-			nrSamples = 1
-		}
-		result = make([]byte, int(nrSamples)*2)
-		for i := uint32(0); i < nrSamples; i++ {
-			binary.BigEndian.PutUint16(result[i*2:(i+1)*2], intervalSize)
-		}
-		return result
+	// Calculate bitcell period in nanoseconds
+	// bitRateKhz is in kbps, so bitRate_bps = bitRateKhz * 1000
+	bitRateBps := float64(bitRateKhz) * 1000.0 * 2
+	bitcellPeriodNs := uint64(1e9 / bitRateBps)
+
+	// Calculate 2-bitcell period
+	twoBitcellPeriodNs := 2 * bitcellPeriodNs
+
+	// Get last transition time (or 0 if empty)
+	lastTime := uint64(0)
+	if len(transitions) > 0 {
+		lastTime = transitions[len(transitions)-1]
 	}
 
-	// Calculate rotation duration in nanoseconds
-	rotationDurationNs := 60e9 / float64(rpm)
-	indexTime25ns := uint32(rotationDurationNs / 25.0)
+	// Append transitions at 2-bitcell intervals until we reach the rotation duration
+	currentTime := lastTime
+	for currentTime+twoBitcellPeriodNs <= uint64(rotationDurationNs) {
+		currentTime += twoBitcellPeriodNs
+		transitions = append(transitions, currentTime)
+	}
+
+	return transitions
+}
+
+// Encode flux transition times into SuperCard Pro flux format.
+// Transitions are relative times in nanoseconds, converted to intervals in 25ns units.
+func encodeFluxToSCP(transitions []uint64) []byte {
+	var result []byte
 
 	// Convert transitions to intervals
 	lastTime := uint64(0)
@@ -96,25 +105,6 @@ func encodeFluxToSCP(transitions []uint64, rpm uint16) []byte {
 		result = append(result, intervalBytes...)
 
 		lastTime = transitionTime
-	}
-
-	// Ensure we cover at least one full revolution
-	// Calculate total duration from the last transition time
-	totalTime25ns := uint32(lastTime / 25)
-	if totalTime25ns < indexTime25ns {
-		remaining25ns := indexTime25ns - totalTime25ns
-		// Add padding intervals to cover the remaining time
-		// Use a reasonable interval size for padding
-		intervalSize := uint16(40) // 40 * 25ns = 1 microsecond
-		nrPaddingSamples := remaining25ns / uint32(intervalSize)
-		if nrPaddingSamples == 0 {
-			nrPaddingSamples = 1
-		}
-		for i := uint32(0); i < nrPaddingSamples; i++ {
-			intervalBytes := make([]byte, 2)
-			binary.BigEndian.PutUint16(intervalBytes, intervalSize)
-			result = append(result, intervalBytes...)
-		}
 	}
 
 	return result
@@ -185,34 +175,17 @@ func (c *Client) Write(filename string) error {
 				mfmBits = disk.Tracks[cyl].Side1
 			}
 
-			if len(mfmBits) == 0 {
-				// Empty track - skip or write minimal flux data
-				// Generate minimal flux data for one revolution
-				fluxData := encodeFluxToSCP(nil, disk.Header.FloppyRPM)
-				nrSamples := uint32(len(fluxData) / 2)
-
-				// Load flux data into RAM
-				err = c.loadRAM(fluxData)
-				if err != nil {
-					return fmt.Errorf("failed to load flux data for cylinder %d, head %d: %w", cyl, head, err)
-				}
-
-				// Write flux (2 revolutions for normal writes)
-				err = c.writeFlux(nrSamples, 2)
-				if err != nil {
-					return fmt.Errorf("failed to write flux data for cylinder %d, head %d: %w", cyl, head, err)
-				}
-				continue
-			}
-
 			// Convert MFM bitcells to flux transitions
 			transitions, err := mfmToFluxTransitions(mfmBits, disk.Header.BitRate)
 			if err != nil {
 				return fmt.Errorf("failed to convert MFM to flux transitions for cylinder %d, head %d: %w", cyl, head, err)
 			}
 
+			// Extend transitions to cover full rotation
+			transitions = coverFullRotation(transitions, disk.Header.BitRate, disk.Header.FloppyRPM)
+
 			// Encode flux transitions to SuperCard Pro format
-			fluxData := encodeFluxToSCP(transitions, disk.Header.FloppyRPM)
+			fluxData := encodeFluxToSCP(transitions)
 			nrSamples := uint32(len(fluxData) / 2)
 
 			// Load flux data into RAM

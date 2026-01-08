@@ -59,10 +59,40 @@ func mfmToFluxTransitions(mfmBits []byte, bitRateKhz uint16) ([]uint64, error) {
 	return transitions, nil
 }
 
+// Extend transitions array to cover a full rotation period.
+// Appends transitions at 2-bitcell intervals until the rotation duration is reached.
+func coverFullRotation(transitions []uint64, bitRateKhz uint16, floppyRPM uint16) []uint64 {
+	// Calculate rotation duration in nanoseconds
+	// Rotation duration = 60 seconds / RPM = 60e9 nanoseconds / RPM
+	rotationDurationNs := uint32(60e9 / float64(floppyRPM))
+
+	// Calculate bitcell period in nanoseconds
+	// bitRateKhz is in kbps, so bitRate_bps = bitRateKhz * 1000
+	bitRateBps := float64(bitRateKhz) * 1000.0 * 2
+	bitcellPeriodNs := uint64(1e9 / bitRateBps)
+
+	// Calculate 2-bitcell period
+	twoBitcellPeriodNs := 2 * bitcellPeriodNs
+
+	// Get last transition time (or 0 if empty)
+	lastTime := uint64(0)
+	if len(transitions) > 0 {
+		lastTime = transitions[len(transitions)-1]
+	}
+
+	// Append transitions at 2-bitcell intervals until we reach the rotation duration
+	currentTime := lastTime
+	for currentTime+twoBitcellPeriodNs <= uint64(rotationDurationNs) {
+		currentTime += twoBitcellPeriodNs
+		transitions = append(transitions, currentTime)
+	}
+
+	return transitions
+}
+
 // Encode flux transition times into Greaseweazle flux stream format.
 // Transitions are relative times in nanoseconds, converted to ticks based on sample frequency.
-// Ensure the stream covers at least minRotationTicks by padding with FLUXOP_SPACE if necessary.
-func encodeFluxStream(transitions []uint64, sampleFreqHz uint32, minRotationTicks uint32) []byte {
+func encodeFluxStream(transitions []uint64, sampleFreqHz uint32) []byte {
 	var result []byte
 	tickPeriodNs := 1e9 / float64(sampleFreqHz) // 13.889
 	lastTime := uint64(0)
@@ -117,19 +147,6 @@ func encodeFluxStream(transitions []uint64, sampleFreqHz uint32, minRotationTick
 	}
 	if DebugFlag {
 		fmt.Printf("--- %d transitions -> %d fluxes\n", len(transitions), len(result))
-	}
-
-	// We need to cover a full rotation. If we haven't reached it yet, pad with FLUXOP_SPACE
-	// Calculate total duration from the last transition time (most accurate)
-	totalTicks := uint32(float64(lastTime) / tickPeriodNs)
-	if totalTicks < minRotationTicks {
-		remainingTicks := minRotationTicks - totalTicks
-		if DebugFlag {
-			fmt.Printf("--- append %d space ticks\n", remainingTicks)
-		}
-		result = append(result, 0xFF, FLUXOP_SPACE)
-		n28 := encodeN28(remainingTicks)
-		result = append(result, n28...)
 	}
 
 	// Terminate stream with null byte
@@ -268,16 +285,11 @@ func (c *Client) Write(filename string) error {
 				return fmt.Errorf("failed to convert MFM to flux transitions for cylinder %d, head %d: %w", cyl, head, err)
 			}
 
-			// Calculate minimum rotation duration in ticks
-			// When terminate_at_index=1, the device expects flux data to cover at least one full rotation
-			// Rotation duration = 60 seconds / RPM = 60e9 nanoseconds / RPM
-			rotationDurationNs := 60e9 / float64(disk.Header.FloppyRPM)
-			tickPeriodNs := 1e9 / float64(c.firmwareInfo.SampleFreqHz)
-			minRotationTicks := uint32(rotationDurationNs / tickPeriodNs)
+			// Extend transitions to cover full rotation
+			transitions = coverFullRotation(transitions, disk.Header.BitRate, disk.Header.FloppyRPM)
 
 			// Encode flux transitions to flux stream format
-			// Ensure it covers at least one full rotation to avoid underflow error
-			fluxData := encodeFluxStream(transitions, c.firmwareInfo.SampleFreqHz, minRotationTicks)
+			fluxData := encodeFluxStream(transitions, c.firmwareInfo.SampleFreqHz)
 
 			// Write flux stream to floppy
 			err = c.WriteFlux(fluxData)
