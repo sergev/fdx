@@ -5,3 +5,4 @@ floppy-tool
 *.hfe
 *.img
 .le.ini
+*.mgc

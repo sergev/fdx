@@ -1,0 +1,24 @@
+# HFE (HxC Floppy Emulator) file format recognition
+# This magic file allows the 'file' command to recognize HFE files
+# and display their metadata: tracks, sides, bit rate, and RPM
+
+# HFE v1 format
+0	string	HXCPICFE\0	HFE v1 floppy disk image
+>9	byte	x		\b, %d tracks
+>10	byte	x		\b, %d sides
+>12	leshort	x		\b, %d kB/s bit rate
+>14	leshort	x		\b, %d RPM
+
+# HFE v2 format
+0	string	HXCPICFE\1	HFE v2 floppy disk image
+>9	byte	x		\b, %d tracks
+>10	byte	x		\b, %d sides
+>12	leshort	x		\b, %d kB/s bit rate
+>14	leshort	x		\b, %d RPM
+
+# HFE v3 format
+0	string	HXCHFEV3	HFE v3 floppy disk image
+>9	byte	x		\b, %d tracks
+>10	byte	x		\b, %d sides
+>12	leshort	x		\b, %d kB/s bit rate
+>14	leshort	x		\b, %d RPM
