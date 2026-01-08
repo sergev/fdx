@@ -43,7 +43,7 @@ HFE files have a 512-byte header with the following structure at the beginning:
 
    Expected output:
    ```
-   testdata/fat12v3.hfe: HFE floppy disk image, 2 tracks, 2 sides, 500 kB/s bit rate, 300 RPM
+   testdata/fat12v3.hfe: HFE floppy disk image, 2 tracks, 2 sides, 500 kB/s bit rate, 0 RPM
    ```
 
 ### Option 2: User-specific Installation

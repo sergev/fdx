@@ -10,7 +10,7 @@ const (
 
 // Constants for HFE format signatures
 const (
-	// Signature for HFE v1 format
+	// Signature for HFE v1/v2 format
 	HFEv1Signature = "HXCPICFE"
 
 	// Signature for HFE v3 format
@@ -33,42 +33,47 @@ const (
 
 // Track encoding types
 const (
-	ENC_ISOIBM_MFM = iota
-	ENC_Amiga_MFM
-	ENC_ISOIBM_FM
-	ENC_Emu_FM
-	ENC_Unknown = 0xff
+	ENC_ISOIBM_MFM = 0x00
+	ENC_Amiga_MFM  = 0x01
+	ENC_ISOIBM_FM  = 0x02
+	ENC_Emu_FM     = 0x03
+	ENC_Unknown    = 0xff
 )
 
 // Interface mode types
 const (
-	IFM_IBMPC_DD = iota
-	IFM_IBMPC_HD
-	IFM_AtariST_DD
-	IFM_AtariST_HD
-	IFM_Amiga_DD
-	IFM_Amiga_HD
-	IFM_CPC_DD
-	IFM_GenericShugart_DD
-	IFM_IBMPC_ED
-	IFM_MSX2_DD
-	IFM_C64_DD
-	IFM_EmuShugart_DD
+	IFM_IBMPC_DD          = 0x00
+	IFM_IBMPC_HD          = 0x01
+	IFM_AtariST_DD        = 0x02
+	IFM_AtariST_HD        = 0x03
+	IFM_Amiga_DD          = 0x04
+	IFM_Amiga_HD          = 0x05
+	IFM_CPC_DD            = 0x06
+	IFM_GenericShugart_DD = 0x07
+	IFM_IBMPC_ED          = 0x08
+	IFM_MSX2_DD           = 0x09
+	IFM_C64_DD            = 0x0A
+	IFM_EmuShugart_DD     = 0x0B
+	IFM_S950_DD           = 0x0C
+	IFM_S950_HD           = 0x0D
+	IFM_DISABLE           = 0xFE
 )
 
 // Header represents the HFE v3 file header
 type Header struct {
 	HeaderSignature     [8]byte
-	FormatRevision      uint8
-	NumberOfTrack       uint8
-	NumberOfSide        uint8
-	TrackEncoding       uint8
-	BitRate             uint16 // in kB/s
-	FloppyRPM           uint16
-	FloppyInterfaceMode uint8
-	WriteProtected      uint8
+	FormatRevision      uint8  // 0 for the HFEv1, 1 for the HFEv2, reset to 0 for HFEv3
+	NumberOfTrack       uint8  // Number of track(s) in the file
+	NumberOfSide        uint8  // Not used by the emulator
+	TrackEncoding       uint8  // Used for the write support
+	BitRate             uint16 // in kB/s, max 1000
+	FloppyRPM           uint16 // Not used by the emulator
+	FloppyInterfaceMode uint8  // see Interface mode types
+	WriteProtected      uint8  // Reserved
 	TrackListOffset     uint16 // in 512-byte blocks
-	WriteAllowed        uint8
+	WriteAllowed        uint8  // 0x00 : Write protected, 0xFF: Unprotected
+
+	// v1.1 addition – Set them to 0xFF if unused.
 	SingleStep          uint8
 	Track0S0AltEncoding uint8
 	Track0S0Encoding    uint8
