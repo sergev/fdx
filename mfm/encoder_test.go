@@ -47,4 +47,3 @@ func TestMfmToFluxTransitions(t *testing.T) {
 		t.Errorf("Expected transitions array: %v", expectedTransitions)
 	}
 }
-
