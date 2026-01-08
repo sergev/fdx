@@ -427,29 +427,6 @@ func (c *Client) calculateRPMAndBitRate(decoded *DecodedStreamData) (uint16, uin
 	return roundedRPM, roundedBitRate
 }
 
-// kfFluxIterator provides flux intervals from KryoFlux decoded stream data
-// It implements pll.FluxSource interface
-type kfFluxIterator struct {
-	transitions []uint64 // Absolute transition times in nanoseconds
-	index       int      // Current index into transitions
-	lastTime    uint64   // Last transition time (for calculating intervals)
-}
-
-// NextFlux returns the next flux interval in nanoseconds (time until next transition)
-// Returns 0 if no more transitions available
-// Implements pll.FluxSource interface
-func (fi *kfFluxIterator) NextFlux() uint64 {
-	if fi.index >= len(fi.transitions) {
-		return 0 // No more transitions
-	}
-
-	nextTime := fi.transitions[fi.index]
-	interval := nextTime - fi.lastTime
-	fi.lastTime = nextTime
-	fi.index++
-	return interval
-}
-
 // Recover raw MFM bitcells from KryoFlux decoded stream data using PLL,
 // and returns MFM bitcells as bytes (bitcells packed MSB-first, not decoded data bits)
 func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) ([]byte, error) {
@@ -458,11 +435,7 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 	}
 
 	// Create flux iterator from transition times
-	fi := &kfFluxIterator{
-		transitions: decoded.FluxTransitions,
-		index:       0,
-		lastTime:    0, // Start from time 0
-	}
+	fi := pll.NewFluxIterator(decoded.FluxTransitions)
 
 	// Initialize PLL
 	pllState := &pll.State{}
@@ -475,7 +448,7 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 	var bitcells []bool
 	for {
 		// Check if transitions are exhausted or nearly exhausted BEFORE generating more bits
-		if fi.index >= len(decoded.FluxTransitions) {
+		if fi.IsDone() {
 			// Transitions exhausted - stop immediately
 			break
 		}

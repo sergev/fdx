@@ -9,29 +9,6 @@ import (
 	"floppy/pll"
 )
 
-// scpFluxIterator provides flux intervals from SuperCard Pro flux data
-// It implements pll.FluxSource interface
-type scpFluxIterator struct {
-	transitions []uint64 // Absolute transition times in nanoseconds
-	index       int      // Current index into transitions
-	lastTime    uint64   // Last transition time (for calculating intervals)
-}
-
-// NextFlux returns the next flux interval in nanoseconds (time until next transition)
-// Returns 0 if no more transitions available
-// Implements pll.FluxSource interface
-func (fi *scpFluxIterator) NextFlux() uint64 {
-	if fi.index >= len(fi.transitions) {
-		return 0 // No more transitions
-	}
-
-	nextTime := fi.transitions[fi.index]
-	interval := nextTime - fi.lastTime
-	fi.lastTime = nextTime
-	fi.index++
-	return interval
-}
-
 // calculateRPMAndBitRate calculates RPM and bit rate from SuperCard Pro flux data
 // Returns the calculated RPM: 300 or 360
 // Returns the calculated bit rate: 250, 500 or 1000 kbps
@@ -129,11 +106,7 @@ func (c *Client) decodeFluxToMFM(fluxData *FluxData, bitRateKhz uint16) ([]byte,
 
 	// Step 2: Apply PLL to recover clock and generate bitcell boundaries
 	// Create flux iterator from transition times
-	fi := &scpFluxIterator{
-		transitions: transitions,
-		index:       0,
-		lastTime:    0, // Start from time 0
-	}
+	fi := pll.NewFluxIterator(transitions)
 
 	// Initialize PLL
 	pllState := &pll.State{}
@@ -151,7 +124,7 @@ func (c *Client) decodeFluxToMFM(fluxData *FluxData, bitRateKhz uint16) ([]byte,
 		bitcells = append(bitcells, first)
 		bitcells = append(bitcells, second)
 
-		if fi.index >= len(fi.transitions) {
+		if fi.IsDone() {
 			// No more transitions available
 			break
 		}

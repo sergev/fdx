@@ -29,30 +29,6 @@ func readN28(data []byte, offset int) (uint32, int, error) {
 	return value, 4, nil
 }
 
-// fluxIterator provides flux intervals from absolute transition times
-// Similar to scp_next_flux() but works with pre-computed transition times
-// It implements pll.FluxSource interface
-type fluxIterator struct {
-	transitions []uint64 // Absolute transition times in nanoseconds
-	index       int      // Current index into transitions
-	lastTime    uint64   // Last transition time (for calculating intervals)
-}
-
-// NextFlux returns the next flux interval in nanoseconds (time until next transition)
-// Returns 0 if no more transitions available
-// Implements pll.FluxSource interface
-func (fi *fluxIterator) NextFlux() uint64 {
-	if fi.index >= len(fi.transitions) {
-		return 0 // No more transitions
-	}
-
-	nextTime := fi.transitions[fi.index]
-	interval := nextTime - fi.lastTime
-	fi.lastTime = nextTime
-	fi.index++
-	return interval
-}
-
 // ReadFlux reads raw flux data from the current track
 // ticks: maximum ticks to read (0 = no limit)
 // maxIndex: maximum index pulses to read (0 = no limit, typically 2 for 2 revolutions)
@@ -292,11 +268,7 @@ func (c *Client) decodeFluxToMFM(fluxData []byte, bitRateKhz uint16) ([]byte, er
 
 	// Step 2: Apply SCP-style PLL to recover clock and generate bitcell boundaries
 	// Create flux iterator from transition times
-	fi := &fluxIterator{
-		transitions: transitions,
-		index:       0,
-		lastTime:    0, // Start from time 0
-	}
+	fi := pll.NewFluxIterator(transitions)
 
 	// Initialize PLL
 	pllState := &pll.State{}
@@ -314,7 +286,7 @@ func (c *Client) decodeFluxToMFM(fluxData []byte, bitRateKhz uint16) ([]byte, er
 		bitcells = append(bitcells, first)
 		bitcells = append(bitcells, second)
 
-		if fi.index >= len(fi.transitions) {
+		if fi.IsDone() {
 			// No more transitions available
 			break
 		}

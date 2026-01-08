@@ -20,6 +20,43 @@ type FluxSource interface {
 	NextFlux() uint64
 }
 
+// FluxIterator provides flux intervals from absolute transition times.
+// It implements the FluxSource interface.
+type FluxIterator struct {
+	transitions []uint64 // Absolute transition times in nanoseconds
+	index       int      // Current index into transitions
+	lastTime    uint64   // Last transition time (for calculating intervals)
+}
+
+// NewFluxIterator creates a new FluxIterator from transition times.
+func NewFluxIterator(transitions []uint64) *FluxIterator {
+	return &FluxIterator{
+		transitions: transitions,
+		index:       0,
+		lastTime:    0,
+	}
+}
+
+// NextFlux returns the next flux interval in nanoseconds (time until next transition).
+// Returns 0 if no more transitions are available.
+// Implements the FluxSource interface.
+func (fi *FluxIterator) NextFlux() uint64 {
+	if fi.index >= len(fi.transitions) {
+		return 0 // No more transitions
+	}
+
+	nextTime := fi.transitions[fi.index]
+	interval := nextTime - fi.lastTime
+	fi.lastTime = nextTime
+	fi.index++
+	return interval
+}
+
+// IsDone returns true if all transitions have been consumed.
+func (fi *FluxIterator) IsDone() bool {
+	return fi.index >= len(fi.transitions)
+}
+
 // State represents the state of the SCP-style Phase-Locked Loop.
 // Based on pll_t from legacy/mfmdisk/scp.c
 type State struct {
@@ -108,4 +145,3 @@ func NextBit(pll *State, source FluxSource) bool {
 	pll.ClockedZeros = 0
 	return true // 1
 }
-
