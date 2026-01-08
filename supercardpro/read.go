@@ -105,22 +105,22 @@ func (c *Client) decodeFluxToMFM(fluxData *FluxData, bitRateKhz uint16) ([]byte,
 	}
 
 	// Step 2: Apply PLL to recover clock and generate bitcell boundaries
-	// Create and initialize PLL state with transitions
-	pllState := pll.NewState(transitions, bitRateKhz)
+	// Create and initialize PLL decoder with transitions
+	decoder := pll.NewDecoder(transitions, bitRateKhz)
 
 	// Ignore first half-bit (as done in reference implementation)
-	_ = pll.NextBit(pllState)
+	_ = decoder.NextBit()
 
 	// Generate MFM bitcells using PLL algorithm
 	var bitcells []bool
 	for {
-		first := pll.NextBit(pllState)
-		second := pll.NextBit(pllState)
+		first := decoder.NextBit()
+		second := decoder.NextBit()
 
 		bitcells = append(bitcells, first)
 		bitcells = append(bitcells, second)
 
-		if pllState.IsDone() {
+		if decoder.IsDone() {
 			// No more transitions available
 			break
 		}

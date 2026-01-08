@@ -11,10 +11,10 @@ const (
 	PHASE_ADJ_PCT = 60 // Phase adjustment percentage
 )
 
-// State represents the state of the SCP-style Phase-Locked Loop.
+// Decoder decodes flux transitions into bits using an SCP-style Phase-Locked Loop.
 // Based on pll_t from legacy/mfmdisk/scp.c
 // It combines PLL state with flux iteration functionality.
-type State struct {
+type Decoder struct {
 	// PLL state fields
 	PeriodIdeal  float64 // Expected clock period in nanoseconds
 	Period       float64 // Current clock period in nanoseconds
@@ -28,10 +28,10 @@ type State struct {
 	lastTime    uint64   // Last transition time (for calculating intervals)
 }
 
-// NewState creates a new PLL state with the given transitions and bit rate.
+// NewDecoder creates a new PLL decoder with the given transitions and bit rate.
 // It initializes both the PLL state and flux iterator.
-func NewState(transitions []uint64, bitRateKhz uint16) *State {
-	return &State{
+func NewDecoder(transitions []uint64, bitRateKhz uint16) *Decoder {
+	return &Decoder{
 		// Initialize PLL state
 		PeriodIdeal:  1e6 / float64(bitRateKhz) / 2,
 		Period:       1e6 / float64(bitRateKhz) / 2,
@@ -45,19 +45,9 @@ func NewState(transitions []uint64, bitRateKhz uint16) *State {
 	}
 }
 
-// Init initializes the PLL state (for re-initialization if needed).
-// Based on pll_init() from legacy/mfmdisk/scp.c
-func Init(pll *State, bitRateKhz uint16) {
-	pll.PeriodIdeal = 1e6 / float64(bitRateKhz) / 2
-	pll.Period = pll.PeriodIdeal
-	pll.Flux = 0
-	pll.Time = 0
-	pll.ClockedZeros = 0
-}
-
 // NextFlux returns the next flux interval in nanoseconds (time until next transition).
 // Returns 0 if no more transitions are available.
-func (pll *State) NextFlux() uint64 {
+func (pll *Decoder) NextFlux() uint64 {
 	if pll.index >= len(pll.transitions) {
 		return 0 // No more transitions
 	}
@@ -70,14 +60,14 @@ func (pll *State) NextFlux() uint64 {
 }
 
 // IsDone returns true if all transitions have been consumed.
-func (pll *State) IsDone() bool {
+func (pll *Decoder) IsDone() bool {
 	return pll.index >= len(pll.transitions)
 }
 
 // NextBit decodes and returns next bit from the flux input stream.
 // Based on pll_next_bit() from legacy/mfmdisk/scp.c
 // Returns: false for clocked zero, true for transition detected
-func NextBit(pll *State) bool {
+func (pll *Decoder) NextBit() bool {
 	//fmt.Printf("--- pllNextBit() period = %.0f, time = %.0f, flux = %.0f, periodIdeal = %.0f\n", pll.Period, pll.Time, pll.Flux, pll.PeriodIdeal)
 
 	// Accumulate flux until it exceeds period/2
