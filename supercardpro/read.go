@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"floppy/hfe"
-	"floppy/pll"
+	"floppy/mfm"
 )
 
 // calculateRPMAndBitRate calculates RPM and bit rate from SuperCard Pro flux data
@@ -106,7 +106,7 @@ func (c *Client) decodeFluxToMFM(fluxData *FluxData, bitRateKhz uint16) ([]byte,
 
 	// Step 2: Apply PLL to recover clock and generate bitcell boundaries
 	// Create and initialize PLL decoder with transitions
-	decoder := pll.NewDecoder(transitions, bitRateKhz)
+	decoder := mfm.NewDecoder(transitions, bitRateKhz)
 
 	// Ignore first half-bit (as done in reference implementation)
 	_ = decoder.NextBit()

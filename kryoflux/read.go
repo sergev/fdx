@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"floppy/hfe"
-	"floppy/pll"
+	"floppy/mfm"
 )
 
 // Find EOF marker in the KryoFlux stream data according to the format specification
@@ -435,7 +435,7 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 	}
 
 	// Create and initialize PLL decoder with transitions
-	decoder := pll.NewDecoder(decoded.FluxTransitions, bitRateKhz)
+	decoder := mfm.NewDecoder(decoded.FluxTransitions, bitRateKhz)
 
 	// Ignore first half-bit (as done in reference implementation)
 	_ = decoder.NextBit()

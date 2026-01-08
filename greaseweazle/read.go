@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"floppy/hfe"
-	"floppy/pll"
+	"floppy/mfm"
 )
 
 // readN28 decodes a 28-bit value from Greaseweazle N28 encoding
@@ -268,7 +268,7 @@ func (c *Client) decodeFluxToMFM(fluxData []byte, bitRateKhz uint16) ([]byte, er
 
 	// Step 2: Apply SCP-style PLL to recover clock and generate bitcell boundaries
 	// Create and initialize PLL decoder with transitions
-	decoder := pll.NewDecoder(transitions, bitRateKhz)
+	decoder := mfm.NewDecoder(transitions, bitRateKhz)
 
 	// Ignore first half-bit (as done in reference implementation)
 	_ = decoder.NextBit()

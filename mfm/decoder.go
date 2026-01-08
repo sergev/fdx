@@ -1,15 +1,15 @@
-package pll
+package mfm
 
 import (
-        "fmt"
+	"fmt"
 )
 
 // PLL and MFM constants
 // SCP PLL algorithm constants (from legacy/mfmdisk/scp.c)
 const (
-	CLOCK_MAX_ADJ = 10 // +/- 10% adjustment range (90%-110% of CLOCK_CENTRE)
-	PERIOD_ADJ_PCT = 5 // Period adjustment percentage
-	PHASE_ADJ_PCT = 60 // Phase adjustment percentage
+	CLOCK_MAX_ADJ  = 10 // +/- 10% adjustment range (90%-110% of CLOCK_CENTRE)
+	PERIOD_ADJ_PCT = 5  // Period adjustment percentage
+	PHASE_ADJ_PCT  = 60 // Phase adjustment percentage
 
 	// Enable for debug
 	DebugFlag = false
