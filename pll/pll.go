@@ -11,63 +11,41 @@ const (
 	PHASE_ADJ_PCT = 60 // Phase adjustment percentage
 )
 
-// FluxSource provides flux intervals for the PLL algorithm.
-// Different adapters can implement this interface to provide flux data
-// in their own format.
-type FluxSource interface {
-	// NextFlux returns the next flux interval in nanoseconds (time until next transition).
-	// Returns 0 if no more transitions are available.
-	NextFlux() uint64
-}
+// State represents the state of the SCP-style Phase-Locked Loop.
+// Based on pll_t from legacy/mfmdisk/scp.c
+// It combines PLL state with flux iteration functionality.
+type State struct {
+	// PLL state fields
+	PeriodIdeal  float64 // Expected clock period in nanoseconds
+	Period       float64 // Current clock period in nanoseconds
+	Flux         float64 // Accumulated flux time in nanoseconds
+	Time         float64 // Total time elapsed in nanoseconds
+	ClockedZeros int     // Count of consecutive clocked zeros
 
-// FluxIterator provides flux intervals from absolute transition times.
-// It implements the FluxSource interface.
-type FluxIterator struct {
+	// Flux iterator fields
 	transitions []uint64 // Absolute transition times in nanoseconds
 	index       int      // Current index into transitions
 	lastTime    uint64   // Last transition time (for calculating intervals)
 }
 
-// NewFluxIterator creates a new FluxIterator from transition times.
-func NewFluxIterator(transitions []uint64) *FluxIterator {
-	return &FluxIterator{
+// NewState creates a new PLL state with the given transitions and bit rate.
+// It initializes both the PLL state and flux iterator.
+func NewState(transitions []uint64, bitRateKhz uint16) *State {
+	return &State{
+		// Initialize PLL state
+		PeriodIdeal:  1e6 / float64(bitRateKhz) / 2,
+		Period:       1e6 / float64(bitRateKhz) / 2,
+		Flux:         0,
+		Time:         0,
+		ClockedZeros: 0,
+		// Initialize flux iterator
 		transitions: transitions,
 		index:       0,
 		lastTime:    0,
 	}
 }
 
-// NextFlux returns the next flux interval in nanoseconds (time until next transition).
-// Returns 0 if no more transitions are available.
-// Implements the FluxSource interface.
-func (fi *FluxIterator) NextFlux() uint64 {
-	if fi.index >= len(fi.transitions) {
-		return 0 // No more transitions
-	}
-
-	nextTime := fi.transitions[fi.index]
-	interval := nextTime - fi.lastTime
-	fi.lastTime = nextTime
-	fi.index++
-	return interval
-}
-
-// IsDone returns true if all transitions have been consumed.
-func (fi *FluxIterator) IsDone() bool {
-	return fi.index >= len(fi.transitions)
-}
-
-// State represents the state of the SCP-style Phase-Locked Loop.
-// Based on pll_t from legacy/mfmdisk/scp.c
-type State struct {
-	PeriodIdeal  float64 // Expected clock period in nanoseconds
-	Period       float64 // Current clock period in nanoseconds
-	Flux         float64 // Accumulated flux time in nanoseconds
-	Time         float64 // Total time elapsed in nanoseconds
-	ClockedZeros int     // Count of consecutive clocked zeros
-}
-
-// Init initializes the PLL state.
+// Init initializes the PLL state (for re-initialization if needed).
 // Based on pll_init() from legacy/mfmdisk/scp.c
 func Init(pll *State, bitRateKhz uint16) {
 	pll.PeriodIdeal = 1e6 / float64(bitRateKhz) / 2
@@ -77,15 +55,34 @@ func Init(pll *State, bitRateKhz uint16) {
 	pll.ClockedZeros = 0
 }
 
+// NextFlux returns the next flux interval in nanoseconds (time until next transition).
+// Returns 0 if no more transitions are available.
+func (pll *State) NextFlux() uint64 {
+	if pll.index >= len(pll.transitions) {
+		return 0 // No more transitions
+	}
+
+	nextTime := pll.transitions[pll.index]
+	interval := nextTime - pll.lastTime
+	pll.lastTime = nextTime
+	pll.index++
+	return interval
+}
+
+// IsDone returns true if all transitions have been consumed.
+func (pll *State) IsDone() bool {
+	return pll.index >= len(pll.transitions)
+}
+
 // NextBit decodes and returns next bit from the flux input stream.
 // Based on pll_next_bit() from legacy/mfmdisk/scp.c
 // Returns: false for clocked zero, true for transition detected
-func NextBit(pll *State, source FluxSource) bool {
+func NextBit(pll *State) bool {
 	//fmt.Printf("--- pllNextBit() period = %.0f, time = %.0f, flux = %.0f, periodIdeal = %.0f\n", pll.Period, pll.Time, pll.Flux, pll.PeriodIdeal)
 
 	// Accumulate flux until it exceeds period/2
 	for pll.Flux < pll.Period/2 {
-		fluxInterval := source.NextFlux()
+		fluxInterval := pll.NextFlux()
 		if fluxInterval == 0 {
 			// No more transitions, return false (clocked zero)
 			pll.ClockedZeros++

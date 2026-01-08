@@ -434,27 +434,23 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 		return nil, fmt.Errorf("no flux transitions found")
 	}
 
-	// Create flux iterator from transition times
-	fi := pll.NewFluxIterator(decoded.FluxTransitions)
-
-	// Initialize PLL
-	pllState := &pll.State{}
-	pll.Init(pllState, bitRateKhz)
+	// Create and initialize PLL state with transitions
+	pllState := pll.NewState(decoded.FluxTransitions, bitRateKhz)
 
 	// Ignore first half-bit (as done in reference implementation)
-	_ = pll.NextBit(pllState, fi)
+	_ = pll.NextBit(pllState)
 
 	// Generate MFM bitcells using PLL algorithm
 	var bitcells []bool
 	for {
 		// Check if transitions are exhausted or nearly exhausted BEFORE generating more bits
-		if fi.IsDone() {
+		if pllState.IsDone() {
 			// Transitions exhausted - stop immediately
 			break
 		}
 
-		first := pll.NextBit(pllState, fi)
-		second := pll.NextBit(pllState, fi)
+		first := pll.NextBit(pllState)
+		second := pll.NextBit(pllState)
 
 		bitcells = append(bitcells, first)
 		bitcells = append(bitcells, second)

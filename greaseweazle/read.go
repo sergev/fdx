@@ -267,26 +267,22 @@ func (c *Client) decodeFluxToMFM(fluxData []byte, bitRateKhz uint16) ([]byte, er
 	}
 
 	// Step 2: Apply SCP-style PLL to recover clock and generate bitcell boundaries
-	// Create flux iterator from transition times
-	fi := pll.NewFluxIterator(transitions)
-
-	// Initialize PLL
-	pllState := &pll.State{}
-	pll.Init(pllState, bitRateKhz)
+	// Create and initialize PLL state with transitions
+	pllState := pll.NewState(transitions, bitRateKhz)
 
 	// Ignore first half-bit (as done in reference implementation)
-	_ = pll.NextBit(pllState, fi)
+	_ = pll.NextBit(pllState)
 
 	// Generate MFM bitcells using PLL algorithm
 	var bitcells []bool
 	for {
-		first := pll.NextBit(pllState, fi)
-		second := pll.NextBit(pllState, fi)
+		first := pll.NextBit(pllState)
+		second := pll.NextBit(pllState)
 
 		bitcells = append(bitcells, first)
 		bitcells = append(bitcells, second)
 
-		if fi.IsDone() {
+		if pllState.IsDone() {
 			// No more transitions available
 			break
 		}
