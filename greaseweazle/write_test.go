@@ -2,6 +2,8 @@ package greaseweazle
 
 import (
 	"testing"
+
+	"floppy/mfm"
 )
 
 // Verify function mfmToFluxTransitions().
@@ -18,7 +20,7 @@ func TestMfmToFluxTransitions(t *testing.T) {
 	expectedTransitions := []uint64{2000, 6000, 9000, 11000, 13000, 16000}
 
 	// Call the function
-	transitions, err := mfmToFluxTransitions(mfmBits, bitRateKhz)
+	transitions, err := mfm.GenerateFluxTransitions(mfmBits, bitRateKhz)
 
 	// Verify no error
 	if err != nil {
