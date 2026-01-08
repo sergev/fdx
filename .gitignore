@@ -4,3 +4,4 @@ floppy-tool
 .cursor
 *.hfe
 *.img
+.le.ini

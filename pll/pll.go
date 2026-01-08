@@ -1,14 +1,18 @@
 package pll
 
+import (
+        "fmt"
+)
+
 // PLL and MFM constants
 // SCP PLL algorithm constants (from legacy/mfmdisk/scp.c)
 const (
-	// CLOCK_MAX_ADJ is the +/- adjustment range (90%-110% of ideal)
 	CLOCK_MAX_ADJ = 10 // +/- 10% adjustment range (90%-110% of CLOCK_CENTRE)
-	// PERIOD_ADJ_PCT is the period adjustment percentage
 	PERIOD_ADJ_PCT = 5 // Period adjustment percentage
-	// PHASE_ADJ_PCT is the phase adjustment percentage
 	PHASE_ADJ_PCT = 60 // Phase adjustment percentage
+
+	// Enable for debug
+	DebugFlag = false
 )
 
 // Decoder decodes flux transitions into bits using an SCP-style Phase-Locked Loop.
@@ -38,6 +42,7 @@ func NewDecoder(transitions []uint64, bitRateKhz uint16) *Decoder {
 		Flux:         0,
 		Time:         0,
 		ClockedZeros: 0,
+
 		// Initialize flux iterator
 		transitions: transitions,
 		index:       0,
@@ -68,7 +73,9 @@ func (pll *Decoder) IsDone() bool {
 // Based on pll_next_bit() from legacy/mfmdisk/scp.c
 // Returns: false for clocked zero, true for transition detected
 func (pll *Decoder) NextBit() bool {
-	//fmt.Printf("--- pllNextBit() period = %.0f, time = %.0f, flux = %.0f, periodIdeal = %.0f\n", pll.Period, pll.Time, pll.Flux, pll.PeriodIdeal)
+	if DebugFlag {
+		fmt.Printf("--- pllNextBit() period = %.0f, time = %.0f, flux = %.0f, periodIdeal = %.0f\n", pll.Period, pll.Time, pll.Flux, pll.PeriodIdeal)
+	}
 
 	// Accumulate flux until it exceeds period/2
 	for pll.Flux < pll.Period/2 {
@@ -76,22 +83,30 @@ func (pll *Decoder) NextBit() bool {
 		if fluxInterval == 0 {
 			// No more transitions, return false (clocked zero)
 			pll.ClockedZeros++
-			//fmt.Printf("---     No more transitions, clockedZeros = %d\n", pll.ClockedZeros)
+			if DebugFlag {
+				fmt.Printf("---     No more transitions, clockedZeros = %d\n", pll.ClockedZeros)
+			}
 			return false // 0
 		}
 		pll.Flux += float64(fluxInterval)
-		//fmt.Printf("---     increment flux = %.0f\n", pll.Flux)
+		if DebugFlag {
+			fmt.Printf("---     increment flux = %.0f\n", pll.Flux)
+		}
 	}
 
 	// Advance time by one clock period
 	pll.Time += pll.Period
 	pll.Flux -= pll.Period
-	//fmt.Printf("---     advance time = %.0f, flux = %.0f\n", pll.Time, pll.Flux)
+	if DebugFlag {
+		fmt.Printf("---     advance time = %.0f, flux = %.0f\n", pll.Time, pll.Flux)
+	}
 
 	// Check if we have a clocked zero (flux >= period/2 after subtraction)
 	if pll.Flux >= pll.Period/2 {
 		pll.ClockedZeros++
-		//fmt.Printf("---     return 0, clockedZeros = %d\n", pll.ClockedZeros)
+		if DebugFlag {
+			fmt.Printf("---     return 0, clockedZeros = %d\n", pll.ClockedZeros)
+		}
 		return false // 0
 	}
 
@@ -100,11 +115,15 @@ func (pll *Decoder) NextBit() bool {
 	if pll.ClockedZeros <= 3 {
 		// In sync: adjust base clock by a fraction of phase mismatch
 		pll.Period += pll.Flux * PERIOD_ADJ_PCT / 100
-		//fmt.Printf("---     in sync: adjust period = %.0f\n", pll.Period)
+		if DebugFlag {
+			fmt.Printf("---     in sync: adjust period = %.0f\n", pll.Period)
+		}
 	} else {
 		// Out of sync: adjust base clock towards centre
 		pll.Period += (pll.PeriodIdeal - pll.Period) * PERIOD_ADJ_PCT / 100
-		//fmt.Printf("---     out of sync: normalize period = %.0f\n", pll.Period)
+		if DebugFlag {
+			fmt.Printf("---     out of sync: normalize period = %.0f\n", pll.Period)
+		}
 	}
 
 	// Clamp the period adjustment range
@@ -112,14 +131,18 @@ func (pll *Decoder) NextBit() bool {
 	pMin := (pll.PeriodIdeal * (100 - CLOCK_MAX_ADJ)) / 100
 	if pll.Period < pMin {
 		pll.Period = pMin
-		//fmt.Printf("---     clamp to min: period = %.0f\n", pll.Period)
+		if DebugFlag {
+			fmt.Printf("---     clamp to min: period = %.0f\n", pll.Period)
+		}
 	}
 
 	// the maximum allowed clock period
 	pMax := (pll.PeriodIdeal * (100 + CLOCK_MAX_ADJ)) / 100
 	if pll.Period > pMax {
 		pll.Period = pMax
-		//fmt.Printf("---     clamp to max: period = %.0f\n", pll.Period)
+		if DebugFlag {
+			fmt.Printf("---     clamp to max: period = %.0f\n", pll.Period)
+		}
 	}
 
 	// PLL: Adjust clock phase according to mismatch
@@ -127,7 +150,9 @@ func (pll *Decoder) NextBit() bool {
 	newFlux := pll.Flux * (100 - PHASE_ADJ_PCT) / 100
 	pll.Time += pll.Flux - newFlux
 	pll.Flux = newFlux
-	//fmt.Printf("---     adjust phase: newFlux = %.0f, time = %.0f, flux = %.0f\n", newFlux, pll.Time, pll.Flux)
+	if DebugFlag {
+		fmt.Printf("---     adjust phase: newFlux = %.0f, time = %.0f, flux = %.0f\n", newFlux, pll.Time, pll.Flux)
+	}
 
 	pll.ClockedZeros = 0
 	return true // 1
