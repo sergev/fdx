@@ -2,6 +2,7 @@ package mfm
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
 )
 
@@ -15,12 +16,56 @@ func decodeAllBits(decoder *Decoder, numBits int) []bool {
 	return bits
 }
 
+// Helper function: randomizeFluxTransitions adds random variation to flux transitions
+// to simulate real-world flux timing variations. Each transition can vary by up to
+// 20% of bitcellPeriodNs. Uses a fixed seed for test reproducibility.
+func randomizeFluxTransitions(transitions []uint64, bitRateKhz uint16) []uint64 {
+	// Calculate bitcell period in nanoseconds (matching encoder.go logic)
+	bitRateBps := float64(bitRateKhz) * 1000.0 * 2
+	bitcellPeriodNs := uint64(1e9 / bitRateBps)
+
+	// Initialize RNG with fixed seed for test reproducibility
+	rng := rand.New(rand.NewSource(42))
+
+	// Post-process transitions: add random variation up to 20% of bitcellPeriodNs
+	// Variation can be positive or negative, but transitions must remain in order
+	maxVariation := float64(bitcellPeriodNs) * 0.20 // 20% of bitcell period
+
+	// Create a copy of transitions to avoid modifying the original slice
+	randomized := make([]uint64, len(transitions))
+	copy(randomized, transitions)
+
+	previousTime := uint64(0)
+	for i := range randomized {
+		// Generate random variation between -20% and +20% of bitcellPeriodNs
+		variation := (rng.Float64()*2.0 - 1.0) * maxVariation // Range: [-maxVariation, +maxVariation]
+
+		// Apply variation to transition time
+		newTime := float64(randomized[i]) + variation
+
+		// Ensure transition time is non-negative and maintains order
+		if newTime < float64(previousTime) {
+			newTime = float64(previousTime) + 1 // Minimum 1ns after previous
+		}
+
+		randomized[i] = uint64(newTime)
+		previousTime = randomized[i]
+	}
+
+	return randomized
+}
+
 // Helper function: createTestDecoder creates a decoder from MFM bytes using GenerateFluxTransitions.
+// It post-processes transitions to add random variation to simulate real-world flux timing variations.
 func createTestDecoder(mfmBits []byte, bitRateKhz uint16) (*Decoder, error) {
 	transitions, err := GenerateFluxTransitions(mfmBits, bitRateKhz)
 	if err != nil {
 		return nil, err
 	}
+
+	// Randomize transitions to simulate real-world flux variations
+	transitions = randomizeFluxTransitions(transitions, bitRateKhz)
+
 	return NewDecoder(transitions, bitRateKhz), nil
 }
 
