@@ -1,4 +1,4 @@
-package cmd
+package adapter
 
 import (
 	"fmt"
@@ -18,4 +18,3 @@ var formatCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(formatCmd)
 }
-

@@ -448,3 +448,7 @@ func (c *Client) Close() error {
 func (c *Client) Format() error {
 	return fmt.Errorf("Format() not yet implemented for SuperCard Pro adapter")
 }
+
+func init() {
+	adapter.RegisterAdapter(VendorID, ProductID, NewClient)
+}

@@ -570,3 +570,7 @@ func (c *Client) Erase() error {
 func (c *Client) Format() error {
 	return fmt.Errorf("Format() not yet implemented for Greaseweazle adapter")
 }
+
+func init() {
+	adapter.RegisterAdapter(VendorID, ProductID, NewClient)
+}

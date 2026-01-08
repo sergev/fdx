@@ -674,3 +674,7 @@ func (c *Client) Close() error {
 	}
 	return nil
 }
+
+func init() {
+	adapter.RegisterUSBAdapter(NewClient)
+}

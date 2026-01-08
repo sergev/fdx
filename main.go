@@ -1,7 +1,12 @@
 package main
 
-import "floppy/cmd"
+import (
+	_ "floppy/greaseweazle"
+	_ "floppy/kryoflux"
+	_ "floppy/supercardpro"
+	"floppy/adapter"
+)
 
 func main() {
-	cmd.Execute()
+	adapter.Execute()
 }
