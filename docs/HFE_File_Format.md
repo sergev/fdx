@@ -47,22 +47,22 @@ The header contains metadata about the disk image:
 
 ```go
 type Header struct {
-    HeaderSignature      [8]byte   // "HXCHFEV3" for HFEv3
+    HeaderSignature      [8]byte   // "HXCPICFE" or "HXCHFEV3"
     FormatRevision       uint8     // 0 for HFEv1/HFEv3, 1 for HFEv2
     NumberOfTrack        uint8     // Number of tracks
     NumberOfSide         uint8     // Number of sides (not used by emulator)
     TrackEncoding        uint8     // Track encoding mode
     BitRate              uint16    // Bitrate in Kbit/s (max 1000)
     FloppyRPM            uint16    // Rotations per minute (not used)
-    FloppyInterfaceMode   uint8     // Floppy interface mode
+    FloppyInterfaceMode  uint8     // Floppy interface mode
     WriteProtected       uint8     // 0x00=protected, 0xFF=unprotected (v1.1: was "dnu")
     TrackListOffset      uint16    // Offset of track list in 512-byte blocks
     WriteAllowed         uint8     // 0x00=protected, 0xFF=unprotected
     SingleStep           uint8     // 0xFF=single step, 0x00=double step
     Track0S0AltEncoding  uint8     // 0x00=use alt encoding, 0xFF=use default
-    Track0S0Encoding      uint8     // Alternate encoding for track 0 side 0
+    Track0S0Encoding     uint8     // Alternate encoding for track 0 side 0
     Track0S1AltEncoding  uint8     // 0x00=use alt encoding, 0xFF=use default
-    Track0S1Encoding      uint8     // Alternate encoding for track 0 side 1
+    Track0S1Encoding     uint8     // Alternate encoding for track 0 side 1
 }
 ```
 
@@ -70,7 +70,7 @@ type Header struct {
 
 - **HeaderSignature**:
   - `"HXCPICFE"` for HFEv1 and HFEv2
-  - `"HXCHFEV3"` for HFEv3 (our implementation)
+  - `"HXCHFEV3"` for HFEv3
 
 - **FormatRevision**:
   - `0` for HFEv1 and HFEv3
@@ -290,31 +290,13 @@ side1Data[blockOffset:blockOffset+256] = trackBlock[256:512]
    - Apply bit reversal before writing
    - Pad to 512-byte boundary
 
-## Constants
-
-```go
-const (
-    HFEv3Signature = "HXCHFEV3"
-
-    OPCODE_MASK       = 0xF0
-    NOP_OPCODE       = 0xF0
-    SETINDEX_OPCODE  = 0xF1
-    SETBITRATE_OPCODE = 0xF2
-    SKIPBITS_OPCODE  = 0xF3
-    RAND_OPCODE      = 0xF4
-
-    FLOPPYEMUFREQ = 36000000  // Floppy emulator frequency (36 MHz)
-    BlockSize = 512           // Block size in bytes
-)
-```
-
 ## Format Versions
 
 - **HFEv1**: Original format, no opcodes
 - **HFEv2**: Added 4-byte opcodes (experimental)
 - **HFEv3**: Optimized opcodes (1-2 bytes), current standard
 
-Our implementation supports **HFEv3 only**.
+Fdx implementation supports HFEv1 and HFEv3.
 
 ## Notes
 
