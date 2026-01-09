@@ -387,6 +387,24 @@ func (c *Client) Read(filename string) error {
 			// Calculate RPM and BitRate from first track (cylinder 0, head 0)
 			if cyl == 0 && head == 0 {
 				calculatedRPM, calculatedBitRate := c.calculateRPMAndBitRate(fluxData)
+
+				// Round to either 300 or 360 RPM (standard floppy drive speeds)
+				// Use 330 RPM as the threshold (midpoint between 300 and 360)
+				if calculatedRPM < 330 {
+					calculatedRPM = 300
+				} else {
+					calculatedRPM = 360
+				}
+
+				// Round to standard floppy drive bitrates: 250, 500, or 1000 kbps
+				// Use thresholds: < 375 -> 250, < 750 -> 500, >= 750 -> 1000
+				if calculatedBitRate < 375 {
+					calculatedBitRate = 250
+				} else if calculatedBitRate < 750 {
+					calculatedBitRate = 500
+				} else {
+					calculatedBitRate = 1000
+				}
 				fmt.Printf("Rotation Speed: %d RPM\n", calculatedRPM)
 				fmt.Printf("Bit Rate: %d kbps\n", calculatedBitRate)
 

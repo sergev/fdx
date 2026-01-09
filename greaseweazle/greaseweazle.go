@@ -97,6 +97,10 @@ type Client struct {
 	serialNumber string
 }
 
+func init() {
+	adapter.RegisterAdapter(VendorID, ProductID, NewClient)
+}
+
 // NewClient creates a new Greaseweazle client using the provided port details
 // It opens the serial port, fetches the firmware version during initialization, and stores all information
 // Returns a FloppyAdapter interface implementation
@@ -138,8 +142,7 @@ func NewClient(portDetails *enumerator.PortDetails) (adapter.FloppyAdapter, erro
 	}
 
 	/* Configure the hardware. */
-	cmd := []byte{CMD_SET_BUS_TYPE, 3, BUS_IBMPC}
-	err = client.doCommand(cmd)
+	err = client.SetBusType()
 	if err != nil {
 		port.Close()
 		return nil, fmt.Errorf("failed to set bus type: %w", err)
@@ -401,13 +404,36 @@ func (c *Client) PrintPins() {
 	}
 }
 
+// Show RPM
+func (c *Client) PrintRotationSpeed() {
+	// Use head #0.
+	err := c.SetHead(0)
+	if err != nil {
+		return
+	}
+
+	err = c.SetMotor(0, true)
+	if err != nil {
+		return
+	}
+	defer c.SetMotor(0, false) // Turn off motor when done
+
+	// Read flux data (0 ticks = no limit, 2 index pulses = 2 revolutions)
+	fluxData, err := c.ReadFlux(0, 2)
+	if err != nil {
+		return
+	}
+
+	// Calculate RPM from first track (cylinder 0, head 0)
+	rpm, _ := c.calculateRPMAndBitRate(fluxData)
+	if rpm > 0 {
+		fmt.Printf("Rotation Speed: %d RPM\n", rpm)
+	}
+}
+
 // PrintStatus prints all firmware information to stdout
 func (c *Client) PrintStatus() {
 	fw := c.firmwareInfo
-	firmwareMode := "Bootloader"
-	if fw.IsMainFirmware {
-		firmwareMode = "Main Firmware"
-	}
 
 	usbSpeedStr := "Unknown"
 	switch fw.USBSpeed {
@@ -432,7 +458,7 @@ func (c *Client) PrintStatus() {
 		mcuName = fmt.Sprintf("Unknown (model %d)", fw.HwModel)
 	}
 
-	fmt.Printf("Greaseweazle Firmware Version: %d.%d (%s)\n", fw.FwMajor, fw.FwMinor, firmwareMode)
+	fmt.Printf("Greaseweazle Firmware Version: %d.%d\n", fw.FwMajor, fw.FwMinor)
 	fmt.Printf("Serial Number: %s\n", c.serialNumber)
 	fmt.Printf("Max Command: %d\n", fw.MaxCmd)
 	fmt.Printf("Sample Frequency: %.1f MHz\n", float64(fw.SampleFreqHz)*1.0e-6)
@@ -448,6 +474,19 @@ func (c *Client) PrintStatus() {
 
 	// Display pin status
 	//c.PrintPins()
+
+	// Show whether drive 0 is connected.
+	// Reset, then try to seek to track #0.
+	driveIsConnected := (c.Reset() == nil) &&
+		(c.SetBusType() == nil) &&
+		(c.SelectDrive(0) == nil) &&
+		(c.Seek(0) == nil)
+	if !driveIsConnected {
+		fmt.Printf("Floppy Drive: Disconnected\n")
+	} else {
+		fmt.Printf("Floppy Drive: Connected\n")
+		c.PrintRotationSpeed()
+	}
 }
 
 // Seek moves the read/write head to the specified cylinder
@@ -481,6 +520,18 @@ func (c *Client) SetMotor(drive byte, on bool) error {
 // GetFluxStatus retrieves the status of the last read/write operation
 func (c *Client) GetFluxStatus() error {
 	cmd := []byte{CMD_GET_FLUX_STATUS, 2}
+	return c.doCommand(cmd)
+}
+
+// Reset to initial state
+func (c *Client) Reset() error {
+	cmd := []byte{CMD_RESET, 2}
+	return c.doCommand(cmd)
+}
+
+// Set bus type
+func (c *Client) SetBusType() error {
+	cmd := []byte{CMD_SET_BUS_TYPE, 3, BUS_IBMPC}
 	return c.doCommand(cmd)
 }
 
@@ -569,8 +620,4 @@ func (c *Client) Erase() error {
 // Format formats the floppy disk
 func (c *Client) Format() error {
 	return fmt.Errorf("Format() not yet implemented for Greaseweazle adapter")
-}
-
-func init() {
-	adapter.RegisterAdapter(VendorID, ProductID, NewClient)
 }
