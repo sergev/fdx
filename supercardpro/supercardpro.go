@@ -63,6 +63,10 @@ type Client struct {
 	serialNumber string
 }
 
+func init() {
+	adapter.RegisterAdapter(VendorID, ProductID, NewClient)
+}
+
 // NewClient creates a new SuperCard Pro client using the provided port details
 // It opens the serial port and initializes the connection
 func NewClient(portDetails *enumerator.PortDetails) (adapter.FloppyAdapter, error) {
@@ -152,40 +156,6 @@ func (c *Client) scpSend(cmd byte, data []byte, readData []byte) error {
 	return nil
 }
 
-// SCPInfo contains hardware and firmware version information
-type SCPInfo struct {
-	HardwareMajor uint8
-	HardwareMinor uint8
-	FirmwareMajor uint8
-	FirmwareMinor uint8
-}
-
-// getSCPInfo retrieves hardware and firmware version information from the device
-func (c *Client) getSCPInfo() (SCPInfo, error) {
-	var info SCPInfo
-
-	// Send SCPCMD_SCPINFO command with no data
-	err := c.scpSend(SCPCMD_SCPINFO, nil, nil)
-	if err != nil {
-		return info, fmt.Errorf("failed to send SCPINFO command: %w", err)
-	}
-
-	// Read 2 bytes: [hardware_version][firmware_version]
-	response := make([]byte, 2)
-	_, err = io.ReadFull(c.port, response)
-	if err != nil {
-		return info, fmt.Errorf("failed to read version info: %w", err)
-	}
-
-	// Parse versions: upper nibble = major, lower nibble = minor
-	info.HardwareMajor = response[0] >> 4
-	info.HardwareMinor = response[0] & 0x0f
-	info.FirmwareMajor = response[1] >> 4
-	info.FirmwareMinor = response[1] & 0x0f
-
-	return info, nil
-}
-
 // selectDrive selects a drive and turns on its motor
 func (c *Client) selectDrive(drive uint) error {
 	// Select drive (SELA for drive 0, SELB for drive 1)
@@ -269,49 +239,6 @@ func (c *Client) seekTrack(track uint) error {
 	return nil
 }
 
-// PrintStatus prints SuperCard Pro status information to stdout
-func (c *Client) PrintStatus() {
-
-	// Fetch and display hardware and firmware versions
-	info, err := c.getSCPInfo()
-	if err != nil {
-		// Failed to fetch version information
-		fmt.Printf("SuperCard Pro Firmware Version: Unknown\n")
-	} else {
-		fmt.Printf("SuperCard Pro Hardware Version: %d.%d\n", info.HardwareMajor, info.HardwareMinor)
-		fmt.Printf("Firmware Version: %d.%d\n", info.FirmwareMajor, info.FirmwareMinor)
-	}
-	fmt.Printf("Serial Number: %s\n", c.serialNumber)
-
-	// Check whether drive 0 is connected.
-	// Try to select drive 0 and seek to track 0.
-	selectErr := c.selectDrive(0)
-	seekErr := c.seekTrack(0)
-	driveIsConnected := (selectErr == nil) && (seekErr == nil)
-
-	if !driveIsConnected {
-		fmt.Printf("Floppy Drive: Disconnected\n")
-		// Clean up if we partially succeeded (drive was selected but seek failed)
-		if selectErr == nil {
-			c.deselectDrive(0)
-		}
-	} else {
-		fmt.Printf("Floppy Drive: Connected\n")
-		// Measure and display RPM
-		// Note: selectDrive already turned on the motor, and seekTrack already positioned the head
-		// Read flux data for 2 revolutions to calculate RPM
-		fluxData, err := c.readFlux(2)
-		if err == nil {
-			rpm, _ := c.calculateRPMAndBitRate(fluxData)
-			if rpm > 0 {
-				fmt.Printf("Rotation Speed: %d RPM\n", rpm)
-			}
-		}
-		// Clean up: deselect drive and turn off motor
-		c.deselectDrive(0)
-	}
-}
-
 // loadRAM loads flux data into device RAM buffer
 // fluxData should be uint16 samples (big-endian), total length = nrSamples * 2 bytes
 func (c *Client) loadRAM(fluxData []byte) error {
@@ -390,80 +317,6 @@ func (c *Client) writeFlux(nrSamples uint32, nrRevs uint8) error {
 	return nil
 }
 
-// Generate minimal flux data for one revolution
-// Assume 300 RPM (250 kbps) drive speed
-// Return flux data as uint16 samples (big-endian) suitable for erase operation
-func (c *Client) generateEraseFlux() []byte {
-	// For 300 RPM: 1 revolution = 0.2 seconds = 200,000,000 nanoseconds
-	// IndexTime in 25ns units = 200,000,000 / 25 = 8,000,000
-	const indexTime = uint32(8000000) // 300 RPM in 25ns units
-
-	// Calculate approximate number of samples needed for one revolution
-	// Use a reasonable interval size (e.g., 2000 units = 50 microseconds)
-	// This gives us enough samples to cover one revolution
-	//	intervalSize := uint16(2000) // 2000 * 25ns = 50 microseconds
-	intervalSize := uint16(40) // 40 * 25ns = 1 microseconds
-	nrSamples := indexTime / uint32(intervalSize)
-
-	// Generate flux data: simple pattern of intervals
-	// For erase, we just need enough data - the exact pattern doesn't matter
-	fluxData := make([]byte, int(nrSamples)*2)
-	for i := uint32(0); i < nrSamples; i++ {
-		// Write interval as big-endian uint16
-		binary.BigEndian.PutUint16(fluxData[i*2:(i+1)*2], intervalSize)
-	}
-
-	return fluxData
-}
-
-// Erase erases the floppy disk
-func (c *Client) Erase() error {
-	// Select drive 0 and turn on motor
-	err := c.selectDrive(0)
-	if err != nil {
-		return fmt.Errorf("failed to select drive: %w", err)
-	}
-	defer c.deselectDrive(0)
-
-	// Generate minimal flux data for one revolution (assumes 300 RPM / 250 kbps)
-	flux := c.generateEraseFlux()
-	nrSamples := uint32(len(flux) / 2)
-
-	// Load flux data into RAM once (same data used for all tracks)
-	err = c.loadRAM(flux)
-	if err != nil {
-		return fmt.Errorf("failed to load flux data: %w", err)
-	}
-
-	// Erase all tracks (typically 0-163 for 3.5" floppy: 82 tracks × 2 sides)
-	// Standard 3.5" DD floppy has 80 tracks, but we'll go up to 82 to be safe
-	maxTrack := uint(82 * 2) // 82 cylinders × 2 sides
-
-	for track := uint(0); track < maxTrack; track++ {
-		cyl := track >> 1
-		side := track & 1
-
-		// Print progress
-		fmt.Printf("\rErasing cylinder %d, side %d...", cyl, side)
-
-		// Seek to track
-		err = c.seekTrack(track)
-		if err != nil {
-			return fmt.Errorf("failed to seek to track %d: %w", track, err)
-		}
-
-		// Write with wipe flag to erase the track (1 revolution for faster erase)
-		// Note: Flux data is already loaded in RAM from the initial loadRAM call
-		err = c.writeFlux(nrSamples, 1)
-		if err != nil {
-			return fmt.Errorf("failed to erase track %d: %w", track, err)
-		}
-	}
-	fmt.Printf(" Done\n")
-
-	return nil
-}
-
 // Close closes the serial port connection
 func (c *Client) Close() error {
 	if c.port != nil {
@@ -475,8 +328,4 @@ func (c *Client) Close() error {
 // Format formats the floppy disk
 func (c *Client) Format() error {
 	return fmt.Errorf("Format() not yet implemented for SuperCard Pro adapter")
-}
-
-func init() {
-	adapter.RegisterAdapter(VendorID, ProductID, NewClient)
 }
