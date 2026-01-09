@@ -1,4 +1,4 @@
-The floppy tool is a CLI program which works with floppy disks via USB adapter.
+The fdx tool is a CLI program which works with floppy disks via USB adapter.
 
 ## Supported Adapters
 
@@ -17,11 +17,11 @@ The tool automatically detects and uses the first available adapter from the lis
 
 ## Usage
 
-    floppy status
-    floppy read [FILE]
-    floppy write FILE
-    floppy format
-    floppy erase
+    fdx status
+    fdx read [FILE]
+    fdx write FILE
+    fdx format
+    fdx erase
 
 ## License
 

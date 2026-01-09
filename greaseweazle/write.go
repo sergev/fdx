@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io"
 
-	"floppy/hfe"
-	"floppy/mfm"
+	"github.com/sergev/fdx/hfe"
+	"github.com/sergev/fdx/mfm"
 )
 
 const (

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 
-	"floppy/hfe"
-	"floppy/mfm"
+	"github.com/sergev/fdx/hfe"
+	"github.com/sergev/fdx/mfm"
 )
 
 // readN28 decodes a 28-bit value from Greaseweazle N28 encoding

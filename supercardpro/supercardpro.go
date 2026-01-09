@@ -2,7 +2,7 @@ package supercardpro
 
 import (
 	"encoding/binary"
-	"floppy/adapter"
+	"github.com/sergev/fdx/adapter"
 	"fmt"
 	"io"
 	"time"

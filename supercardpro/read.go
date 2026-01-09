@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 
-	"floppy/hfe"
-	"floppy/mfm"
+	"github.com/sergev/fdx/hfe"
+	"github.com/sergev/fdx/mfm"
 )
 
 // calculateRPMAndBitRate calculates RPM and bit rate from SuperCard Pro flux data

@@ -11,9 +11,9 @@ import (
 var floppyAdapter FloppyAdapter
 
 var rootCmd = &cobra.Command{
-	Use:   "floppy",
+	Use:   "fdx",
 	Short: "A CLI program which works with floppy disks via USB adapter",
-	Long:  "The floppy tool is a CLI program which works with floppy disks via USB adapter.",
+	Long:  "The fdx tool is a CLI program which works with floppy disks via USB adapter.",
 	CompletionOptions: cobra.CompletionOptions{
 		HiddenDefaultCmd: true,
 	},

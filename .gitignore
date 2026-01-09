@@ -1,5 +1,4 @@
-floppy
-floppy-tool
+fdx
 *.raw
 .cursor
 *.hfe

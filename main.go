@@ -1,10 +1,10 @@
 package main
 
 import (
-	_ "floppy/greaseweazle"
-	_ "floppy/kryoflux"
-	_ "floppy/supercardpro"
-	"floppy/adapter"
+	_ "github.com/sergev/fdx/greaseweazle"
+	_ "github.com/sergev/fdx/kryoflux"
+	_ "github.com/sergev/fdx/supercardpro"
+	"github.com/sergev/fdx/adapter"
 )
 
 func main() {

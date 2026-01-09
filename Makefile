@@ -1,7 +1,7 @@
 #
 # Gisp interpreter
 #
-PROG    = floppy
+PROG    = fdx
 DESTDIR	= $(HOME)/.local
 
 .PHONY: all install uninstall clean test cover bench gotestsum source
@@ -17,6 +17,7 @@ uninstall:
 	rm -f $(DESTDIR)/bin/${PROG}
 
 clean:
+	go clean
 	rm -f ${PROG}
 
 #

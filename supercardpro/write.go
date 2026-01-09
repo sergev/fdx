@@ -4,8 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"floppy/hfe"
-	"floppy/mfm"
+	"github.com/sergev/fdx/hfe"
+	"github.com/sergev/fdx/mfm"
 )
 
 // Encode flux transition times into SuperCard Pro flux format.

@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	"floppy/adapter"
+	"github.com/sergev/fdx/adapter"
 
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
