@@ -282,6 +282,34 @@ func (c *Client) PrintStatus() {
 		fmt.Printf("Firmware Version: %d.%d\n", info.FirmwareMajor, info.FirmwareMinor)
 	}
 	fmt.Printf("Serial Number: %s\n", c.serialNumber)
+
+	// Check whether drive 0 is connected.
+	// Try to select drive 0 and seek to track 0.
+	selectErr := c.selectDrive(0)
+	seekErr := c.seekTrack(0)
+	driveIsConnected := (selectErr == nil) && (seekErr == nil)
+
+	if !driveIsConnected {
+		fmt.Printf("Floppy Drive: Disconnected\n")
+		// Clean up if we partially succeeded (drive was selected but seek failed)
+		if selectErr == nil {
+			c.deselectDrive(0)
+		}
+	} else {
+		fmt.Printf("Floppy Drive: Connected\n")
+		// Measure and display RPM
+		// Note: selectDrive already turned on the motor, and seekTrack already positioned the head
+		// Read flux data for 2 revolutions to calculate RPM
+		fluxData, err := c.readFlux(2)
+		if err == nil {
+			rpm, _ := c.calculateRPMAndBitRate(fluxData)
+			if rpm > 0 {
+				fmt.Printf("Rotation Speed: %d RPM\n", rpm)
+			}
+		}
+		// Clean up: deselect drive and turn off motor
+		c.deselectDrive(0)
+	}
 }
 
 // loadRAM loads flux data into device RAM buffer
