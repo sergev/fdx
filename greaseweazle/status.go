@@ -143,8 +143,10 @@ func (c *Client) PrintRotationSpeed() {
 	// Read flux data (0 ticks = no limit, 2 index pulses = 2 revolutions)
 	fluxData, err := c.ReadFlux(0, 2)
 	if err != nil {
+		fmt.Printf("Floppy Disk: Not inserted\n")
 		return
 	}
+	fmt.Printf("Floppy Disk: Inserted\n")
 
 	// Calculate RPM from first track (cylinder 0, head 0)
 	rpm, _ := c.calculateRPMAndBitRate(fluxData)

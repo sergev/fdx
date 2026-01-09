@@ -72,10 +72,13 @@ func (c *Client) PrintStatus() {
 		// Read flux data for 2 revolutions to calculate RPM
 		fluxData, err := c.readFlux(2)
 		if err == nil {
+			fmt.Printf("Floppy Disk: Inserted\n")
 			rpm, _ := c.calculateRPMAndBitRate(fluxData)
 			if rpm > 0 {
 				fmt.Printf("Rotation Speed: %d RPM\n", rpm)
 			}
+		} else {
+			fmt.Printf("Floppy Disk: Not inserted\n")
 		}
 		// Clean up: deselect drive and turn off motor
 		c.deselectDrive(0)

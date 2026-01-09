@@ -545,14 +545,51 @@ func (c *Client) PrintStatus() {
 	fmt.Printf("%s\n", c.deviceInfo1)
 	fmt.Printf("%s\n", c.deviceInfo2)
 
-	// Query status
-	//status, err := c.getStatus()
-	//if err != nil {
-	//	fmt.Printf("Status: Error querying status: %v\n", err)
-	//} else {
-	//	fmt.Printf("Status: %s\n", status)
-	//}
+	// Check whether drive 0 is connected.
+	// Configure device and try to position head at track 0, side 0.
+	configureErr := c.configure(0, 0, 0, 0)
+	motorErr := c.motorOn(0, 0)
+	driveIsConnected := (configureErr == nil) && (motorErr == nil)
 
+	if !driveIsConnected {
+		fmt.Printf("Floppy Drive: Not detected\n")
+		// Clean up if we partially succeeded (configure worked but motorOn failed)
+		if configureErr == nil {
+			c.motorOff()
+		}
+	} else {
+		fmt.Printf("Floppy Drive: Connected\n")
+		// Ensure motor is turned off when done
+		defer c.motorOff()
+
+		// Capture stream data to check for disk insertion and calculate RPM
+		streamData, err := c.captureStream()
+		if err != nil {
+			fmt.Printf("Floppy Disk: Not inserted\n")
+			return
+		}
+
+		// Decode stream to extract index pulses
+		decoded, err := c.decodeKryoFluxStream(streamData)
+		if err != nil {
+			fmt.Printf("Floppy Disk: Not inserted\n")
+			return
+		}
+
+		// Check if at least 2 index pulses are present (indicates disk is inserted)
+		if len(decoded.IndexPulses) < 2 {
+			fmt.Printf("Floppy Disk: Not inserted\n")
+			return
+		}
+
+		fmt.Printf("Floppy Disk: Inserted\n")
+
+		// Calculate RPM from decoded stream data
+		rpm, _ := c.calculateRPMAndBitRate(decoded)
+		if rpm > 0 {
+			fmt.Printf("Rotation Speed: %d RPM\n", rpm)
+		}
+	}
 }
 
 // configure configures the device with the specified parameters

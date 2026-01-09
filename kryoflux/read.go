@@ -501,7 +501,7 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 func (c *Client) Read(filename string) error {
 	NumberOfTracks := 82
 
-	// Configure device with default values (device=0, density=0, minTrack=0, maxTrack=83)
+	// Configure device with default values (device=0, density=0, minTrack=0, maxTrack=N-1)
 	err := c.configure(0, 0, 0, NumberOfTracks-1)
 	if err != nil {
 		return fmt.Errorf("failed to configure device: %w", err)

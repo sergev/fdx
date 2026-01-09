@@ -21,7 +21,7 @@ var rootCmd = &cobra.Command{
 		var err error
 		floppyAdapter, err = findAdapter()
 		if err != nil {
-			cobra.CheckErr(fmt.Errorf("failed to find USB adapter: %w", err))
+			cobra.CheckErr(fmt.Errorf("%w", err))
 		}
 	},
 }
@@ -70,7 +70,7 @@ func findAdapter() (FloppyAdapter, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("no supported USB adapter found")
+	return nil, fmt.Errorf("no supported USB floppy adapter found")
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
