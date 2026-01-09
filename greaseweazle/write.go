@@ -156,19 +156,6 @@ func (c *Client) Write(filename string) error {
 		return fmt.Errorf("failed to read HFE file: %w", err)
 	}
 
-	// Validate HFE file
-	if disk.Header.NumberOfTrack == 0 || disk.Header.NumberOfSide == 0 {
-		return fmt.Errorf("invalid HFE file: zero tracks or sides")
-	}
-
-	if disk.Header.FloppyRPM == 0 {
-		return fmt.Errorf("invalid HFE file: bad floppy rotation speed")
-	}
-
-	if disk.Header.TrackEncoding != hfe.ENC_ISOIBM_MFM {
-		return fmt.Errorf("unsupported track encoding: %d (only ISOIBM_MFM is supported)", disk.Header.TrackEncoding)
-	}
-
 	// Get number of tracks to write (use minimum of HFE tracks and standard 82)
 	numberOfTracks := int(disk.Header.NumberOfTrack)
 	if numberOfTracks > 82 {

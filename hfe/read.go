@@ -8,7 +8,7 @@ import (
 	"os"
 )
 
-// Read reads an HFE file (v1 or v3) and returns a Disk structure
+// Read an HFE file (v1 or v3) and return a Disk structure
 // Supports HFE format versions:
 //   - v1: signature "HXCPICFE", format revision 0
 //   - v3: signature "HXCHFEV3", format revision 0
@@ -55,8 +55,14 @@ func Read(filename string) (*Disk, error) {
 	}
 
 	// Validate basic fields
-	if disk.Header.NumberOfTrack == 0 || disk.Header.NumberOfSide == 0 {
-		return nil, errors.New("invalid number of tracks or sides")
+	if disk.Header.BitRate == 0 {
+		return nil, errors.New("invalid bit rate")
+	}
+	if disk.Header.NumberOfTrack == 0 {
+		return nil, errors.New("invalid number of tracks")
+	}
+	if disk.Header.NumberOfSide == 0 {
+		return nil, errors.New("invalid number of sides")
 	}
 
 	// Read track offset list
@@ -85,6 +91,26 @@ func Read(filename string) (*Disk, error) {
 			return nil, fmt.Errorf("failed to read track %d: %w", i, err)
 		}
 		disk.Tracks[i] = *trackData
+	}
+
+	// Compute FloppyRPM from track #0 length if not set
+	if disk.Header.FloppyRPM == 0 {
+		trackBits := len(disk.Tracks[0].Side0) * 8
+		if trackBits == 0 {
+			return nil, errors.New("unknown RPM")
+		}
+		rpm := (60 * uint32(disk.Header.BitRate) * 2000) / uint32(trackBits)
+		if rpm > 400 || rpm < 250 {
+			return nil, errors.New("bad RPM")
+		}
+
+		// Round to either 300 or 360 RPM (standard floppy drive speeds)
+		// Use 330 RPM as the threshold (midpoint between 300 and 360)
+		if rpm < 330 {
+			disk.Header.FloppyRPM = 300
+		} else {
+			disk.Header.FloppyRPM = 360
+		}
 	}
 
 	return disk, nil
