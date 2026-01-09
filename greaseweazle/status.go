@@ -204,7 +204,7 @@ func (c *Client) PrintStatus() {
 		(c.SelectDrive(0) == nil) &&
 		(c.Seek(0) == nil)
 	if !driveIsConnected {
-		fmt.Printf("Floppy Drive: Disconnected\n")
+		fmt.Printf("Floppy Drive: Not detected\n")
 	} else {
 		fmt.Printf("Floppy Drive: Connected\n")
 		c.PrintRotationSpeed()

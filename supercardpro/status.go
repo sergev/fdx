@@ -60,7 +60,7 @@ func (c *Client) PrintStatus() {
 	driveIsConnected := (selectErr == nil) && (seekErr == nil)
 
 	if !driveIsConnected {
-		fmt.Printf("Floppy Drive: Disconnected\n")
+		fmt.Printf("Floppy Drive: Not detected\n")
 		// Clean up if we partially succeeded (drive was selected but seek failed)
 		if selectErr == nil {
 			c.deselectDrive(0)
