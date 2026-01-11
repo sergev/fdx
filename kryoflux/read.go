@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sergev/fdx/hfe"
-	"github.com/sergev/fdx/mfm"
+	"github.com/sergev/floppy/hfe"
+	"github.com/sergev/floppy/mfm"
 )
 
 // Find EOF marker in the KryoFlux stream data according to the format specification

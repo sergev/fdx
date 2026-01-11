@@ -1,4 +1,4 @@
-module github.com/sergev/fdx
+module github.com/sergev/floppy
 
 go 1.25.5
 

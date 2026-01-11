@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sergev/fdx/adapter"
+	"github.com/sergev/floppy/adapter"
 
 	"github.com/google/gousb"
 	"go.bug.st/serial/enumerator"

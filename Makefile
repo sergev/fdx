@@ -1,7 +1,7 @@
 #
 # Gisp interpreter
 #
-PROG    = fdx
+PROG    = floppy
 DESTDIR	= $(HOME)/.local
 
 .PHONY: all install uninstall clean test cover bench gotestsum source

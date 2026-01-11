@@ -1,10 +1,10 @@
-The fdx tool is a CLI program which works with floppy disks via USB adapter.
+The floppy tool is a CLI program which works with floppy disks via USB adapter.
 
 ## Installation
 
 The tool can be installed using the following command:
 
-    go install github.com/sergev/fdx@latest
+    go install github.com/sergev/floppy@latest
 
 Note: The Golang compiler must be present on your system for this installation method to work.
 
@@ -25,11 +25,11 @@ The tool automatically detects and uses the first available adapter from the lis
 
 ## Usage
 
-    fdx status
-    fdx read [FILE]
-    fdx write FILE
-    fdx format
-    fdx erase
+    floppy status
+    floppy read [FILE]
+    floppy write FILE
+    floppy format
+    floppy erase
 
 ## Status
 
