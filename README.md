@@ -1,5 +1,17 @@
 The floppy tool is a CLI program which works with floppy disks via USB adapter.
 
+## Supported Adapters
+
+This tool supports three types of USB floppy drive adapters:
+
+1. [Greaseweazle](https://github.com/keirf/greaseweazle) - An open source USB device capable of reading and writing raw data on nearly any type of floppy disk.
+
+2. [SuperCard Pro](https://www.cbmstuff.com/index.php?route=product/product&product_id=52) - A flux level copier/imager/converter system for archiving floppy disks.
+
+3. [KryoFlux](https://webstore.kryoflux.com/catalog/product_info.php?cPath=1&products_id=30) - A professional hardware solution for floppy disk preservation and imaging.
+
+The tool automatically detects and uses the first available adapter from the list above.
+
 ## Installation
 
 The tool can be installed using the following command:
@@ -7,21 +19,6 @@ The tool can be installed using the following command:
     go install github.com/sergev/floppy@latest
 
 Note: The Golang compiler must be present on your system for this installation method to work.
-
-## Supported Adapters
-
-This tool supports three types of USB floppy drive adapters:
-
-1. **Greaseweazle** - An open source USB device capable of reading and writing raw data on nearly any type of floppy disk.
-   Official page: https://github.com/keirf/greaseweazle
-
-2. **SuperCard Pro** - A flux level copier/imager/converter system for archiving floppy disks.
-   Official page: https://www.cbmstuff.com/index.php?route=product/product&product_id=52
-
-3. **KryoFlux** - A professional hardware solution for floppy disk preservation and imaging.
-   Official page: https://webstore.kryoflux.com/catalog/product_info.php?cPath=1&products_id=30
-
-The tool automatically detects and uses the first available adapter from the list above.
 
 ## Usage
 
