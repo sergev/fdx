@@ -8,10 +8,26 @@ import (
 )
 
 var writeCmd = &cobra.Command{
-	Use:   "write FILE",
-	Short: "Write data to the floppy disk",
-	Long:  "Write data from FILE to the floppy disk.",
-	Args:  cobra.ExactArgs(1),
+	Use:   "write SRC.EXT",
+	Short: "Write image to the floppy disk",
+	Long: `Write image from SRC.EXT to the floppy disk.
+Format of floppy image is defined by extension.
+Supported image formats:
+    hde        - HxC Floppy Emulator
+    img or ima - raw binary contents of the entire disk`,
+	// TODO: adf        - Amiga Disk File
+	// TODO: cp2        - Central Point Software's Copy-II-PC
+	// TODO: dcf        - Disk Copy Fast utility
+	// TODO: epl        - EPLCopy utility
+	// TODO: imd        - Dave Dunfield's ImageDisk utility
+	// TODO: mfm        - low-level MFM encoded bit stream
+	// TODO: pdi        - Upland's PlanetPress
+	// TODO: pri        - PCE Raw Image
+	// TODO: psi        - PCE Sector Image
+	// TODO: scp        - SuperCard Pro low-level raw magnetic flux transitions
+	// TODO: td0        - Teledisk
+
+	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if floppyAdapter == nil {
 			cobra.CheckErr(fmt.Errorf("adapter not available"))

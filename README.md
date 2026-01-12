@@ -23,10 +23,11 @@ Note: The Golang compiler must be present on your system for this installation m
 ## Usage
 
     floppy status
-    floppy read [FILE]
-    floppy write FILE
+    floppy read [DEST.EXT]
+    floppy write SRC.EXT
     floppy format
     floppy erase
+    floppy convert SRC.EXT DEST.EXT
 
 ## Status
 

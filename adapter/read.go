@@ -8,10 +8,27 @@ import (
 )
 
 var readCmd = &cobra.Command{
-	Use:   "read [FILE]",
-	Short: "Read data from the floppy disk",
-	Long:  "Read data from the floppy disk. Optionally specify a FILE to read.",
-	Args:  cobra.MaximumNArgs(1),
+	Use:   "read [DEST.EXT]",
+	Short: "Read image of the floppy disk",
+	Long: `Read the floppy disk and save image to file DEST.EXT.
+Format of floppy image is defined by extension.
+By default the floppy image is saved in HDE format as 'image.hde'.
+Supported image formats:
+    hde        - HxC Floppy Emulator
+    img or ima - raw binary contents of the entire disk`,
+	// TODO: adf        - Amiga Disk File
+	// TODO: cp2        - Central Point Software's Copy-II-PC
+	// TODO: dcf        - Disk Copy Fast utility
+	// TODO: epl        - EPLCopy utility
+	// TODO: imd        - Dave Dunfield's ImageDisk utility
+	// TODO: mfm        - low-level MFM encoded bit stream
+	// TODO: pdi        - Upland's PlanetPress
+	// TODO: pri        - PCE Raw Image
+	// TODO: psi        - PCE Sector Image
+	// TODO: scp        - SuperCard Pro low-level raw magnetic flux transitions
+	// TODO: td0        - Teledisk
+
+	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if floppyAdapter == nil {
 			cobra.CheckErr(fmt.Errorf("adapter not available"))
