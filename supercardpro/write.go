@@ -45,30 +45,14 @@ func encodeFluxToSCP(transitions []uint64) []byte {
 	return result
 }
 
-// Write writes data from the specified filename to the floppy disk
-func (c *Client) Write(filename string) error {
+// Write writes data from the HFE disk object to the floppy disk
+func (c *Client) Write(disk *hfe.Disk, numberOfTracks int) error {
 	// Select drive 0 and turn on motor
 	err := c.selectDrive(0)
 	if err != nil {
 		return fmt.Errorf("failed to select drive: %w", err)
 	}
 	defer c.deselectDrive(0) // Deselect drive and turn off motor when done
-
-	// Read HFE file
-	disk, err := hfe.Read(filename)
-	if err != nil {
-		return fmt.Errorf("failed to read HFE file: %w", err)
-	}
-
-	// Get number of tracks to write (use minimum of HFE tracks and standard 82)
-	numberOfTracks := int(disk.Header.NumberOfTrack)
-	if numberOfTracks > 82 {
-		numberOfTracks = 82
-	}
-
-	fmt.Printf("Writing HFE file to floppy disk\n")
-	fmt.Printf("Tracks: %d, Sides: %d, Bit Rate: %d kbps, RPM: %d\n",
-		numberOfTracks, disk.Header.NumberOfSide, disk.Header.BitRate, disk.Header.FloppyRPM)
 
 	// Iterate through cylinders and heads
 	for cyl := 0; cyl < numberOfTracks; cyl++ {

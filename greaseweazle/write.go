@@ -137,8 +137,8 @@ func (c *Client) WriteFlux(fluxData []byte) error {
 	return nil
 }
 
-// Write an HFE file to the floppy disk track by track.
-func (c *Client) Write(filename string) error {
+// Write an HFE disk object to the floppy disk track by track.
+func (c *Client) Write(disk *hfe.Disk, numberOfTracks int) error {
 	// Select drive 0 and turn on motor
 	err := c.SelectDrive(0)
 	if err != nil {
@@ -149,22 +149,6 @@ func (c *Client) Write(filename string) error {
 		return fmt.Errorf("failed to turn on motor: %w", err)
 	}
 	defer c.SetMotor(0, false) // Turn off motor when done
-
-	// Read HFE file
-	disk, err := hfe.Read(filename)
-	if err != nil {
-		return fmt.Errorf("failed to read HFE file: %w", err)
-	}
-
-	// Get number of tracks to write (use minimum of HFE tracks and standard 82)
-	numberOfTracks := int(disk.Header.NumberOfTrack)
-	if numberOfTracks > 82 {
-		numberOfTracks = 82
-	}
-
-	fmt.Printf("Writing HFE file to floppy disk\n")
-	fmt.Printf("Tracks: %d, Sides: %d, Bit Rate: %d kbps, RPM: %d\n",
-		numberOfTracks, disk.Header.NumberOfSide, disk.Header.BitRate, disk.Header.FloppyRPM)
 
 	// Iterate through cylinders and heads
 	for cyl := 0; cyl < numberOfTracks; cyl++ {

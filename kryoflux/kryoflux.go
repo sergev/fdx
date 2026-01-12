@@ -95,6 +95,10 @@ type Client struct {
 	deviceInfo2 string // From REQUEST_INFO index 2
 }
 
+func init() {
+	adapter.RegisterUSBAdapter(NewClient)
+}
+
 // NewClient creates a new KryoFlux client using USB communication
 // The portDetails parameter is ignored as KryoFlux uses USB directly
 func NewClient(portDetails *enumerator.PortDetails) (adapter.FloppyAdapter, error) {
@@ -683,11 +687,6 @@ func (c *Client) writePreamble(file *os.File) error {
 	return nil
 }
 
-// Write writes data from the specified filename to the floppy disk
-func (c *Client) Write(filename string) error {
-	return fmt.Errorf("Write is not supported for KryoFlux adapter")
-}
-
 // Format formats the floppy disk
 func (c *Client) Format() error {
 	return fmt.Errorf("Format is not supported for KryoFlux adapter")
@@ -710,8 +709,4 @@ func (c *Client) Close() error {
 		return c.ctx.Close()
 	}
 	return nil
-}
-
-func init() {
-	adapter.RegisterUSBAdapter(NewClient)
 }

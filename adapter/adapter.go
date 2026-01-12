@@ -14,8 +14,8 @@ type FloppyAdapter interface {
 	// Read reads the entire floppy disk and returns it as an HFE disk object
 	Read() (*hfe.Disk, error)
 
-	// Write writes data from the specified filename to the floppy disk
-	Write(filename string) error
+	// Write writes data from the HFE disk object to the floppy disk
+	Write(disk *hfe.Disk, numberOfTracks int) error
 
 	// Format formats the floppy disk
 	Format() error

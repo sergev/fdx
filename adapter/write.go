@@ -3,6 +3,7 @@ package adapter
 import (
 	"fmt"
 
+	"github.com/sergev/floppy/hfe"
 	"github.com/spf13/cobra"
 )
 
@@ -19,8 +20,24 @@ var writeCmd = &cobra.Command{
 		// Determine input filename
 		filename := args[0]
 
+		// Read HFE file
+		disk, err := hfe.Read(filename)
+		if err != nil {
+			cobra.CheckErr(fmt.Errorf("failed to read HFE file: %w", err))
+		}
+
+        // Get number of tracks to write (use minimum of HFE tracks and standard 82)
+        numberOfTracks := int(disk.Header.NumberOfTrack)
+        if numberOfTracks > 82 {
+                numberOfTracks = 82
+        }
+
+        fmt.Printf("Writing file to floppy disk\n")
+        fmt.Printf("Tracks: %d, Sides: %d, Bit Rate: %d kbps, RPM: %d\n",
+                numberOfTracks, disk.Header.NumberOfSide, disk.Header.BitRate, disk.Header.FloppyRPM)
+
 		// Write floppy disk using adapter interface
-		err := floppyAdapter.Write(filename)
+		err = floppyAdapter.Write(disk, numberOfTracks)
 		if err != nil {
 			cobra.CheckErr(fmt.Errorf("failed to write floppy disk: %w", err))
 		}
