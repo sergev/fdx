@@ -1,14 +1,18 @@
 package adapter
 
-import "go.bug.st/serial/enumerator"
+import (
+	"go.bug.st/serial/enumerator"
+
+	"github.com/sergev/floppy/hfe"
+)
 
 // FloppyAdapter defines the interface for floppy disk adapters
 type FloppyAdapter interface {
 	// PrintStatus prints adapter status information to stdout
 	PrintStatus()
 
-	// Read reads the entire floppy disk and writes it to the specified filename
-	Read(filename string) error
+	// Read reads the entire floppy disk and returns it as an HFE disk object
+	Read() (*hfe.Disk, error)
 
 	// Write writes data from the specified filename to the floppy disk
 	Write(filename string) error

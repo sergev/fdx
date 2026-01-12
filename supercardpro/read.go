@@ -212,12 +212,12 @@ func (c *Client) readFlux(nrRevs uint) (*FluxData, error) {
 	return fluxData, nil
 }
 
-// Read reads the entire floppy disk and writes it to the specified filename as HFE format
-func (c *Client) Read(filename string) error {
+// Read reads the entire floppy disk and returns it as an HFE disk object
+func (c *Client) Read() (*hfe.Disk, error) {
 	// Select drive 0
 	err := c.selectDrive(0)
 	if err != nil {
-		return fmt.Errorf("failed to select drive: %w", err)
+		return nil, fmt.Errorf("failed to select drive: %w", err)
 	}
 	defer c.deselectDrive(0)
 
@@ -255,13 +255,13 @@ func (c *Client) Read(filename string) error {
 		// Seek to track
 		err = c.seekTrack(track)
 		if err != nil {
-			return fmt.Errorf("failed to seek to track %d: %w", track, err)
+			return nil, fmt.Errorf("failed to seek to track %d: %w", track, err)
 		}
 
 		// Read flux data (1 full revolution)
 		fluxData, err := c.readFlux(1)
 		if err != nil {
-			return fmt.Errorf("failed to read flux data from track %d: %w", track, err)
+			return nil, fmt.Errorf("failed to read flux data from track %d: %w", track, err)
 		}
 
 		// Calculate RPM and BitRate from first track (track 0, cylinder 0, head 0)
@@ -277,7 +277,7 @@ func (c *Client) Read(filename string) error {
 		// Decode flux data to MFM bitstream
 		mfmBitstream, err := c.decodeFluxToMFM(fluxData, disk.Header.BitRate)
 		if err != nil {
-			return fmt.Errorf("failed to decode flux data to MFM from track %d: %w", track, err)
+			return nil, fmt.Errorf("failed to decode flux data to MFM from track %d: %w", track, err)
 		}
 
 		// Store MFM bitstream in appropriate side
@@ -289,12 +289,5 @@ func (c *Client) Read(filename string) error {
 	}
 	fmt.Printf(" Done\n")
 
-	// Write HFE file
-	fmt.Printf("Writing HFE file...\n")
-	err = hfe.Write(filename, disk, hfe.HFEVersion1)
-	if err != nil {
-		return fmt.Errorf("failed to write HFE file: %w", err)
-	}
-
-	return nil
+	return disk, nil
 }

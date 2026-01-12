@@ -3,6 +3,7 @@ package adapter
 import (
 	"fmt"
 
+	"github.com/sergev/floppy/hfe"
 	"github.com/spf13/cobra"
 )
 
@@ -23,9 +24,16 @@ var readCmd = &cobra.Command{
 		}
 
 		// Read floppy disk using adapter interface
-		err := floppyAdapter.Read(filename)
+		disk, err := floppyAdapter.Read()
 		if err != nil {
 			cobra.CheckErr(fmt.Errorf("failed to read floppy disk: %w", err))
+		}
+
+		// Write HFE file
+		fmt.Printf("Writing HFE file...\n")
+		err = hfe.Write(filename, disk, hfe.HFEVersion1)
+		if err != nil {
+			cobra.CheckErr(fmt.Errorf("failed to write HFE file: %w", err))
 		}
 
 		fmt.Printf("Successfully read floppy disk to %s\n", filename)

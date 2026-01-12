@@ -324,16 +324,16 @@ func (c *Client) decodeFluxToMFM(fluxData []byte, bitRateKhz uint16) ([]byte, er
 	return mfmBytes, nil
 }
 
-// Read reads the entire floppy disk and writes it to the specified filename as HFE format
-func (c *Client) Read(filename string) error {
+// Read reads the entire floppy disk and returns it as an HFE disk object
+func (c *Client) Read() (*hfe.Disk, error) {
 	// Select drive 0 and turn on motor
 	err := c.SelectDrive(0)
 	if err != nil {
-		return fmt.Errorf("failed to select drive: %w", err)
+		return nil, fmt.Errorf("failed to select drive: %w", err)
 	}
 	err = c.SetMotor(0, true)
 	if err != nil {
-		return fmt.Errorf("failed to turn on motor: %w", err)
+		return nil, fmt.Errorf("failed to turn on motor: %w", err)
 	}
 	defer c.SetMotor(0, false) // Turn off motor when done
 
@@ -369,19 +369,19 @@ func (c *Client) Read(filename string) error {
 			// Seek to cylinder
 			err = c.Seek(byte(cyl))
 			if err != nil {
-				return fmt.Errorf("failed to seek to cylinder %d: %w", cyl, err)
+				return nil, fmt.Errorf("failed to seek to cylinder %d: %w", cyl, err)
 			}
 
 			// Set head
 			err = c.SetHead(byte(head))
 			if err != nil {
-				return fmt.Errorf("failed to set head %d: %w", head, err)
+				return nil, fmt.Errorf("failed to set head %d: %w", head, err)
 			}
 
 			// Read flux data (0 ticks = no limit, 2 index pulses = 2 revolutions)
 			fluxData, err := c.ReadFlux(0, 2)
 			if err != nil {
-				return fmt.Errorf("failed to read flux data from cylinder %d, head %d: %w", cyl, head, err)
+				return nil, fmt.Errorf("failed to read flux data from cylinder %d, head %d: %w", cyl, head, err)
 			}
 
 			// Calculate RPM and BitRate from first track (cylinder 0, head 0)
@@ -422,13 +422,13 @@ func (c *Client) Read(filename string) error {
 			// Decode flux data to MFM bitstream
 			mfmBitstream, err := c.decodeFluxToMFM(fluxData, disk.Header.BitRate)
 			if err != nil {
-				return fmt.Errorf("failed to decode flux data to MFM from cylinder %d, head %d: %w", cyl, head, err)
+				return nil, fmt.Errorf("failed to decode flux data to MFM from cylinder %d, head %d: %w", cyl, head, err)
 			}
 
 			// Check flux status
 			err = c.GetFluxStatus()
 			if err != nil {
-				return fmt.Errorf("flux status error after reading cylinder %d, head %d: %w", cyl, head, err)
+				return nil, fmt.Errorf("flux status error after reading cylinder %d, head %d: %w", cyl, head, err)
 			}
 
 			// Store MFM bitstream in appropriate side
@@ -441,12 +441,5 @@ func (c *Client) Read(filename string) error {
 	}
 	fmt.Printf(" Done\n")
 
-	// Write HFE file
-	fmt.Printf("Writing HFE file...\n")
-	err = hfe.Write(filename, disk, hfe.HFEVersion1)
-	if err != nil {
-		return fmt.Errorf("failed to write HFE file: %w", err)
-	}
-
-	return nil
+	return disk, nil
 }

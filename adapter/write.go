@@ -17,10 +17,7 @@ var writeCmd = &cobra.Command{
 		}
 
 		// Determine input filename
-		filename := "image.hfe"
-		if len(args) > 0 {
-			filename = args[0]
-		}
+		filename := args[0]
 
 		// Write floppy disk using adapter interface
 		err := floppyAdapter.Write(filename)
