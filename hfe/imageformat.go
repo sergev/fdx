@@ -11,18 +11,18 @@ type ImageFormat int
 const (
 	// ImageFormatUnknown represents an unknown or unrecognized format
 	ImageFormatUnknown ImageFormat = iota
-	ImageFormatCP2		// CP2 format - Central Point Software's Copy-II-PC
-	ImageFormatDCF		// DCF format - Disk Copy Fast utility
-	ImageFormatEPL		// EPL format - EPLCopy utility
-	ImageFormatHFE		// HFE format - HxC Floppy Emulator
-	ImageFormatIMD		// IMD format - Dave Dunfield's ImageDisk utility
-	ImageFormatIMG		// IMG or IMA format - a raw, sector-by-sector binary copy of the entire disk
-	ImageFormatMFM		// MFM format - low-level MFM encoded bit stream
-	ImageFormatPDI		// PDI format - Upland's PlanetPress
-	ImageFormatPRI		// PRI format - PCE Raw Image
-	ImageFormatPSI		// PSI format - PCE Sector Image
-	ImageFormatSCP		// SCP format - SuperCard Pro low-level raw magnetic flux transitions
-	ImageFormatTD0		// TD0 format - Teledisk
+	ImageFormatCP2                 // CP2 format - Central Point Software's Copy-II-PC
+	ImageFormatDCF                 // DCF format - Disk Copy Fast utility
+	ImageFormatEPL                 // EPL format - EPLCopy utility
+	ImageFormatHFE                 // HFE format - HxC Floppy Emulator
+	ImageFormatIMD                 // IMD format - Dave Dunfield's ImageDisk utility
+	ImageFormatIMG                 // IMG or IMA format - a raw, sector-by-sector binary copy of the entire disk
+	ImageFormatMFM                 // MFM format - low-level MFM encoded bit stream
+	ImageFormatPDI                 // PDI format - Upland's PlanetPress
+	ImageFormatPRI                 // PRI format - PCE Raw Image
+	ImageFormatPSI                 // PSI format - PCE Sector Image
+	ImageFormatSCP                 // SCP format - SuperCard Pro low-level raw magnetic flux transitions
+	ImageFormatTD0                 // TD0 format - Teledisk
 )
 
 // String returns the string representation of the ImageFormat

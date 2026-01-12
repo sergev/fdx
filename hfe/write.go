@@ -6,9 +6,42 @@ import (
 	"os"
 )
 
-// Write writes a Disk structure to an HFE file
+// Write a Disk structure to a file, according to it's format.
+func Write(filename string, disk *Disk) error {
+	format := DetectImageFormat(filename)
+	switch format {
+	case ImageFormatHFE:
+		return WriteHFE(filename, disk, HFEVersion1)
+	case ImageFormatCP2:
+		return WriteCP2(filename, disk)
+	case ImageFormatDCF:
+		return WriteDCF(filename, disk)
+	case ImageFormatEPL:
+		return WriteEPL(filename, disk)
+	case ImageFormatIMD:
+		return WriteIMD(filename, disk)
+	case ImageFormatIMG:
+		return WriteIMG(filename, disk)
+	case ImageFormatMFM:
+		return WriteMFM(filename, disk)
+	case ImageFormatPDI:
+		return WritePDI(filename, disk)
+	case ImageFormatPRI:
+		return WritePRI(filename, disk)
+	case ImageFormatPSI:
+		return WritePSI(filename, disk)
+	case ImageFormatSCP:
+		return WriteSCP(filename, disk)
+	case ImageFormatTD0:
+		return WriteTD0(filename, disk)
+	default:
+		return fmt.Errorf("unknown or unsupported image format for file: %s", filename)
+	}
+}
+
+// Write a Disk structure to an HFE file.
 // version specifies the HFE format version (1, 2, or 3)
-func Write(filename string, disk *Disk, version HFEVersion) error {
+func WriteHFE(filename string, disk *Disk, version HFEVersion) error {
 	// Validate version
 	if version != HFEVersion1 && version != HFEVersion3 {
 		return fmt.Errorf("invalid HFE version: %d (must be 1 or 3)", version)

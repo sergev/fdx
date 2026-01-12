@@ -8,13 +8,47 @@ import (
 	"os"
 )
 
-// Read an HFE file (v1 or v3) and return a Disk structure
+// Read a disk image file and return a Disk structure.
+// The format is automatically detected from the file extension.
+func Read(filename string) (*Disk, error) {
+	format := DetectImageFormat(filename)
+	switch format {
+	case ImageFormatHFE:
+		return ReadHFE(filename)
+	case ImageFormatCP2:
+		return ReadCP2(filename)
+	case ImageFormatDCF:
+		return ReadDCF(filename)
+	case ImageFormatEPL:
+		return ReadEPL(filename)
+	case ImageFormatIMD:
+		return ReadIMD(filename)
+	case ImageFormatIMG:
+		return ReadIMG(filename)
+	case ImageFormatMFM:
+		return ReadMFM(filename)
+	case ImageFormatPDI:
+		return ReadPDI(filename)
+	case ImageFormatPRI:
+		return ReadPRI(filename)
+	case ImageFormatPSI:
+		return ReadPSI(filename)
+	case ImageFormatSCP:
+		return ReadSCP(filename)
+	case ImageFormatTD0:
+		return ReadTD0(filename)
+	default:
+		return nil, fmt.Errorf("unknown or unsupported image format for file: %s", filename)
+	}
+}
+
+// ReadHFE reads an HFE file (v1 or v3) and return a Disk structure
 // Supports HFE format versions:
 //   - v1: signature "HXCPICFE", format revision 0
 //   - v3: signature "HXCHFEV3", format revision 0
 //
 // v2 format is not supported and will return an error
-func Read(filename string) (*Disk, error) {
+func ReadHFE(filename string) (*Disk, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
