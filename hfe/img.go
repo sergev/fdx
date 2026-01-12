@@ -608,9 +608,9 @@ func ReadIMG(filename string) (*Disk, error) {
 			NumberOfTrack:       uint8(cylinders),
 			NumberOfSide:        uint8(sides),
 			TrackEncoding:       ENC_ISOIBM_MFM,
-			BitRate:             500, // 500 kbps for standard floppy
+			BitRate:             500, // 500 kbps for HD floppy
 			FloppyRPM:           300, // 300 RPM
-			FloppyInterfaceMode: IFM_IBMPC_DD,
+			FloppyInterfaceMode: IFM_IBMPC_HD,
 			WriteProtected:      0xFF,
 			WriteAllowed:        0xFF,
 			SingleStep:          0xFF,
@@ -620,6 +620,19 @@ func ReadIMG(filename string) (*Disk, error) {
 			Track0S1Encoding:    ENC_ISOIBM_MFM,
 		},
 		Tracks: make([]TrackData, cylinders),
+	}
+	if sectorsPerTrack < 12 {
+		// Double density
+		disk.Header.BitRate = 250
+		disk.Header.FloppyInterfaceMode = IFM_IBMPC_DD
+	} else if sectorsPerTrack > 18 {
+		// Extended density
+		disk.Header.BitRate = 1000
+		disk.Header.FloppyInterfaceMode = IFM_IBMPC_ED
+	}
+	if sectorsPerTrack == 15 {
+		// 5.25" drive
+		disk.Header.FloppyRPM = 360
 	}
 
 	// Process each cylinder
@@ -651,19 +664,106 @@ func ReadIMG(filename string) (*Disk, error) {
 			}
 		}
 	}
-
 	return disk, nil
 }
 
-// Write disk contents to an IMG or IMA format file.
-// For now, only supports 1.44MB floppy format (80 tracks × 2 sides × 18 sectors × 512 bytes)
-func WriteIMG(filename string, disk *Disk) error {
-	// Validate disk structure (80 tracks = 40 cylinders × 2 sides)
-	const numCylinders = 40
-	if len(disk.Tracks) < numCylinders {
-		return fmt.Errorf("disk must have at least %d cylinders for 1.44MB format, got %d", numCylinders, len(disk.Tracks))
+// countSectors scans side 0 of track 0 and returns the number of sectors.
+// It counts unique sector numbers found in valid sector headers for cylinder 0, head 0.
+// Returns the sector count (valid values: 8-23, 36).
+func countSectors(sideData []byte) int {
+	if len(sideData) == 0 {
+		return 0
 	}
 
+	reader := newMFMReader(sideData)
+	sectors := make(map[int]bool) // Track unique sector numbers (0-based)
+
+	// Scan through the track looking for sector headers
+	// We'll scan until we've found a reasonable number of sectors or hit an error
+	maxIterations := 100 // Prevent infinite loops
+	iterations := 0
+
+	for iterations < maxIterations {
+		iterations++
+
+		// Scan for sector header marker (tag 0xFE)
+		tag, err := reader.scanIBMPC()
+		if err != nil {
+			// End of track or error, break
+			break
+		}
+		if tag != 0xfe {
+			// Not a sector header, continue scanning
+			continue
+		}
+
+		// Read sector header
+		readCylinder, err := reader.readByte()
+		if err != nil {
+			continue
+		}
+		readHead, err := reader.readByte()
+		if err != nil {
+			continue
+		}
+		sector, err := reader.readByte()
+		if err != nil {
+			continue
+		}
+		size, err := reader.readByte()
+		if err != nil {
+			continue
+		}
+		headerSumHigh, err := reader.readByte()
+		if err != nil {
+			continue
+		}
+		headerSumLow, err := reader.readByte()
+		if err != nil {
+			continue
+		}
+		headerSum := uint16(headerSumHigh)<<8 | uint16(headerSumLow)
+
+		// Verify header CRC
+		myHeaderSum := crc16CCITTByte(0xb230, readCylinder)
+		myHeaderSum = crc16CCITTByte(myHeaderSum, readHead)
+		myHeaderSum = crc16CCITTByte(myHeaderSum, sector)
+		myHeaderSum = crc16CCITTByte(myHeaderSum, size)
+		if myHeaderSum != headerSum {
+			// CRC mismatch, continue searching
+			continue
+		}
+
+		// Verify cylinder and head match (cylinder 0, head 0)
+		if readCylinder != 0 || readHead != 0 {
+			// Wrong track, continue searching
+			continue
+		}
+
+		// Verify size (should be 2 for 512-byte sectors)
+		if size != 2 {
+			// Wrong size, continue searching
+			continue
+		}
+
+		// Extract sector number (1-based in header, convert to 0-based)
+		sectorNum := int(sector) - 1
+		if sectorNum >= 0 {
+			sectors[sectorNum] = true
+		}
+
+		// If we've found a reasonable number of unique sectors, we can stop
+		// The maximum valid value is 36, so if we've found more than that, something's wrong
+		if len(sectors) > 36 {
+			break
+		}
+	}
+
+	return len(sectors)
+}
+
+// Write disk contents to an IMG or IMA format file.
+func WriteIMG(filename string, disk *Disk) error {
 	// Create output file
 	file, err := os.Create(filename)
 	if err != nil {
@@ -671,80 +771,74 @@ func WriteIMG(filename string, disk *Disk) error {
 	}
 	defer file.Close()
 
-	// Process each track (80 tracks = 40 cylinders × 2 sides)
-	const numTracks = 80
-	const numSectorsPerTrack = 18
+	// Figure out disk geometry
 	const sectorSize = 512
+	numCylinders := int(disk.Header.NumberOfTrack)
+	if numCylinders > 80 {
+		// Ignore extra cylinders
+		numCylinders = 80
+	}
+	numHeads := int(disk.Header.NumberOfSide)
+	numSectorsPerTrack := countSectors(disk.Tracks[0].Side0)
+	if numSectorsPerTrack < 8 || (numSectorsPerTrack > 23 && numSectorsPerTrack != 36) {
+		return fmt.Errorf("invalid number of sectors per track: %d (valid values: 8-23, 36)", numSectorsPerTrack)
+	}
 
-	for track := 0; track < numTracks; track++ {
-		cylinder := track / 2
-		head := track % 2
+	// Iterate through cylinders and heads
+	for cyl := 0; cyl < numCylinders; cyl++ {
+		for head := 0; head < numHeads; head++ {
 
-		// Bounds check
-		if cylinder >= len(disk.Tracks) {
-			return fmt.Errorf("cylinder %d out of bounds (disk has %d cylinders)", cylinder, len(disk.Tracks))
-		}
+			// Get appropriate side data
+			var sideData []byte
+			if head == 0 {
+				sideData = disk.Tracks[cyl].Side0
+			} else {
+				sideData = disk.Tracks[cyl].Side1
+			}
 
-		// Get appropriate side data
-		var sideData []byte
-		if head == 0 {
-			sideData = disk.Tracks[cylinder].Side0
-		} else {
-			sideData = disk.Tracks[cylinder].Side1
-		}
+			if len(sideData) == 0 {
+				return fmt.Errorf("empty track %d.%d", cyl, head)
+			}
 
-		if len(sideData) == 0 {
-			// Empty track, write zeros for all sectors
-			zeroSector := make([]byte, sectorSize)
-			for s := 0; s < numSectorsPerTrack; s++ {
-				if _, err := file.Write(zeroSector); err != nil {
-					return fmt.Errorf("failed to write sector %d of track %d: %w", s, track, err)
+			// Create MFM reader for this track
+			reader := newMFMReader(sideData)
+
+			// Extract all sectors from track (may appear in any order)
+			sectors := make(map[int][]byte)
+
+			// Read sectors sequentially until we can't find any more
+			for len(sectors) < numSectorsPerTrack {
+				// Try to read a sector
+				sectorNum, sectorData, err := reader.readSectorIBMPC(cyl, head)
+				if err != nil {
+					// End of track or error, break
+					break
 				}
-			}
-			continue
-		}
 
-		// Create MFM reader for this track
-		reader := newMFMReader(sideData)
+				// Validate sector number
+				if sectorNum < 0 || sectorNum >= numSectorsPerTrack {
+					// Invalid sector number, continue searching
+					continue
+				}
 
-		// Extract all sectors from track (may appear in any order)
-		sectors := make(map[int][]byte)
-
-		// Read sectors sequentially until we can't find any more
-		for len(sectors) < numSectorsPerTrack {
-			// Try to read a sector
-			sectorNum, sectorData, err := reader.readSectorIBMPC(cylinder, head)
-			if err != nil {
-				// End of track or error, break
-				break
+				// Store sector (overwrite if duplicate)
+				sectors[sectorNum] = sectorData
 			}
 
-			// Validate sector number
-			if sectorNum < 0 || sectorNum >= numSectorsPerTrack {
-				// Invalid sector number, continue searching
-				continue
-			}
+			// Write sectors in sequential order
+			for s := 0; s < numSectorsPerTrack; s++ {
+				sectorData, found := sectors[s]
+				if !found {
+					// Missing sector
+					return fmt.Errorf("missing sector %d of track %d.%d", s, cyl, head)
+				}
 
-			// Store sector (overwrite if duplicate)
-			sectors[sectorNum] = sectorData
-		}
-
-		// Write sectors in sequential order (0-17)
-		for s := 0; s < numSectorsPerTrack; s++ {
-			if sectorData, found := sectors[s]; found {
 				// Write sector data
 				if _, err := file.Write(sectorData); err != nil {
-					return fmt.Errorf("failed to write sector %d of track %d: %w", s, track, err)
-				}
-			} else {
-				// Missing sector, write zeros
-				zeroSector := make([]byte, sectorSize)
-				if _, err := file.Write(zeroSector); err != nil {
-					return fmt.Errorf("failed to write zero sector %d of track %d: %w", s, track, err)
+					return fmt.Errorf("failed to write sector %d of track %d.%d: %w", s, cyl, head, err)
 				}
 			}
 		}
 	}
-
 	return nil
 }

@@ -30,17 +30,20 @@ Supported image formats:
 
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		if floppyAdapter == nil {
-			cobra.CheckErr(fmt.Errorf("adapter not available"))
-		}
 
 		// Determine output filename
 		filename := "image.hfe"
 		if len(args) > 0 {
 			filename = args[0]
 		}
+		if hfe.DetectImageFormat(filename) == hfe.ImageFormatUnknown {
+			cobra.CheckErr(fmt.Errorf("unknown image format: %s", filename))
+		}
 
 		// Read floppy disk using adapter interface
+		if floppyAdapter == nil {
+			cobra.CheckErr(fmt.Errorf("adapter not available"))
+		}
 		disk, err := floppyAdapter.Read(82)
 		if err != nil {
 			cobra.CheckErr(fmt.Errorf("failed to read floppy disk: %w", err))
