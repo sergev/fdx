@@ -693,7 +693,7 @@ func (c *Client) Format() error {
 }
 
 // Erase erases the floppy disk
-func (c *Client) Erase() error {
+func (c *Client) Erase(numberOfTracks int) error {
 	return fmt.Errorf("Erase is not supported for KryoFlux adapter")
 }
 

@@ -212,8 +212,8 @@ func (c *Client) readFlux(nrRevs uint) (*FluxData, error) {
 	return fluxData, nil
 }
 
-// Read reads the entire floppy disk and returns it as an HFE disk object
-func (c *Client) Read() (*hfe.Disk, error) {
+// Read reads the entire floppy disk and returns it as a disk object
+func (c *Client) Read(numberOfTracks int) (*hfe.Disk, error) {
 	// Select drive 0
 	err := c.selectDrive(0)
 	if err != nil {
@@ -221,11 +221,10 @@ func (c *Client) Read() (*hfe.Disk, error) {
 	}
 	defer c.deselectDrive(0)
 
-	// Initialize HFE disk structure
-	NumberOfTracks := uint(82)
+	// Initialize disk structure
 	disk := &hfe.Disk{
 		Header: hfe.Header{
-			NumberOfTrack:       uint8(NumberOfTracks),
+			NumberOfTrack:       uint8(numberOfTracks),
 			NumberOfSide:        2,
 			TrackEncoding:       hfe.ENC_ISOIBM_MFM,
 			BitRate:             500,              // Will be calculated from flux data
@@ -239,11 +238,11 @@ func (c *Client) Read() (*hfe.Disk, error) {
 			Track0S1AltEncoding: 0xFF, // Use default encoding
 			Track0S1Encoding:    hfe.ENC_ISOIBM_MFM,
 		},
-		Tracks: make([]hfe.TrackData, NumberOfTracks),
+		Tracks: make([]hfe.TrackData, numberOfTracks),
 	}
 
 	// Iterate through cylinders and sides
-	for track := uint(0); track < NumberOfTracks*2; track++ {
+	for track := uint(0); track < uint(numberOfTracks) * 2; track++ {
 		cyl := track >> 1
 		head := track & 1
 

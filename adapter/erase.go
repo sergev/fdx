@@ -16,7 +16,7 @@ var eraseCmd = &cobra.Command{
 		}
 
 		// Read floppy disk using adapter interface
-		err := floppyAdapter.Erase()
+		err := floppyAdapter.Erase(82)
 		if err != nil {
 			cobra.CheckErr(fmt.Errorf("failed to erase floppy disk: %w", err))
 		}

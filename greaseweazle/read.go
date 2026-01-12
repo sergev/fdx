@@ -324,8 +324,8 @@ func (c *Client) decodeFluxToMFM(fluxData []byte, bitRateKhz uint16) ([]byte, er
 	return mfmBytes, nil
 }
 
-// Read reads the entire floppy disk and returns it as an HFE disk object
-func (c *Client) Read() (*hfe.Disk, error) {
+// Read reads the entire floppy disk and returns it as a disk object
+func (c *Client) Read(numberOfTracks int) (*hfe.Disk, error) {
 	// Select drive 0 and turn on motor
 	err := c.SelectDrive(0)
 	if err != nil {
@@ -337,11 +337,10 @@ func (c *Client) Read() (*hfe.Disk, error) {
 	}
 	defer c.SetMotor(0, false) // Turn off motor when done
 
-	// Initialize HFE disk structure
-	NumberOfTracks := 82
+	// Initialize disk structure
 	disk := &hfe.Disk{
 		Header: hfe.Header{
-			NumberOfTrack:       uint8(NumberOfTracks),
+			NumberOfTrack:       uint8(numberOfTracks),
 			NumberOfSide:        2,
 			TrackEncoding:       hfe.ENC_ISOIBM_MFM,
 			BitRate:             500,              // Will be calculated from flux data
@@ -355,11 +354,11 @@ func (c *Client) Read() (*hfe.Disk, error) {
 			Track0S1AltEncoding: 0xFF, // Use default encoding
 			Track0S1Encoding:    hfe.ENC_ISOIBM_MFM,
 		},
-		Tracks: make([]hfe.TrackData, NumberOfTracks),
+		Tracks: make([]hfe.TrackData, numberOfTracks),
 	}
 
 	// Iterate through cylinders and heads
-	for cyl := 0; cyl < NumberOfTracks; cyl++ {
+	for cyl := 0; cyl < numberOfTracks; cyl++ {
 		for head := 0; head < 2; head++ {
 			// Print progress message
 			if cyl != 0 || head != 0 {

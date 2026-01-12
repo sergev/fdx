@@ -9,7 +9,7 @@ import (
 // Erase erases all tracks on the floppy disk
 // The erase operation writes a DC erase pattern for 200 seconds per track to ensure complete erasure
 // This method iterates over all cylinders (82 tracks) and heads (2 sides), following the same pattern as Read()
-func (c *Client) Erase() error {
+func (c *Client) Erase(numberOfTracks int) error {
 	// Select drive 0 and turn on motor
 	err := c.SelectDrive(0)
 	if err != nil {
@@ -36,8 +36,7 @@ func (c *Client) Erase() error {
 	binary.LittleEndian.PutUint32(cmd[2:6], ticks)
 
 	// Iterate through all cylinders and heads (same as Read())
-	NumberOfTracks := 82
-	for cyl := 0; cyl < NumberOfTracks; cyl++ {
+	for cyl := 0; cyl < numberOfTracks; cyl++ {
 		for head := 0; head < 2; head++ {
 			// Print progress message
 			if cyl != 0 || head != 0 {

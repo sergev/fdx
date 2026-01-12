@@ -12,7 +12,7 @@ type FloppyAdapter interface {
 	PrintStatus()
 
 	// Read reads the entire floppy disk and returns it as an HFE disk object
-	Read() (*hfe.Disk, error)
+	Read(numberOfTracks int) (*hfe.Disk, error)
 
 	// Write writes data from the HFE disk object to the floppy disk
 	Write(disk *hfe.Disk, numberOfTracks int) error
@@ -21,7 +21,7 @@ type FloppyAdapter interface {
 	Format() error
 
 	// Erase erases the floppy disk
-	Erase() error
+	Erase(numberOfTracks int) error
 }
 
 // NewClientFunc is a function type that creates a new adapter client

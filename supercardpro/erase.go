@@ -32,7 +32,7 @@ func (c *Client) generateEraseFlux() []byte {
 }
 
 // Erase erases the floppy disk
-func (c *Client) Erase() error {
+func (c *Client) Erase(numberOfTracks int) error {
 	// Select drive 0 and turn on motor
 	err := c.selectDrive(0)
 	if err != nil {
@@ -52,7 +52,7 @@ func (c *Client) Erase() error {
 
 	// Erase all tracks (typically 0-163 for 3.5" floppy: 82 tracks × 2 sides)
 	// Standard 3.5" DD floppy has 80 tracks, but we'll go up to 82 to be safe
-	maxTrack := uint(82 * 2) // 82 cylinders × 2 sides
+	maxTrack := uint(numberOfTracks * 2) // 82 cylinders × 2 sides
 
 	for track := uint(0); track < maxTrack; track++ {
 		cyl := track >> 1

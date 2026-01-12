@@ -24,7 +24,7 @@ var readCmd = &cobra.Command{
 		}
 
 		// Read floppy disk using adapter interface
-		disk, err := floppyAdapter.Read()
+		disk, err := floppyAdapter.Read(82)
 		if err != nil {
 			cobra.CheckErr(fmt.Errorf("failed to read floppy disk: %w", err))
 		}

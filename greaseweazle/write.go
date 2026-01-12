@@ -137,7 +137,7 @@ func (c *Client) WriteFlux(fluxData []byte) error {
 	return nil
 }
 
-// Write an HFE disk object to the floppy disk track by track.
+// Write a disk object to the floppy disk track by track.
 func (c *Client) Write(disk *hfe.Disk, numberOfTracks int) error {
 	// Select drive 0 and turn on motor
 	err := c.SelectDrive(0)
@@ -172,7 +172,7 @@ func (c *Client) Write(disk *hfe.Disk, numberOfTracks int) error {
 				return fmt.Errorf("failed to set head %d: %w", head, err)
 			}
 
-			// Get MFM bitcells from HFE track data
+			// Get MFM bitcells from track data
 			var mfmBits []byte
 			if head == 0 {
 				mfmBits = disk.Tracks[cyl].Side0
