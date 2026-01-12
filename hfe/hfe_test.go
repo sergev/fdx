@@ -1414,7 +1414,7 @@ func TestCountSectors(t *testing.T) {
 		t.Fatalf("Track 0 side 0 data is empty")
 	}
 
-	// Call countSectors() with the side 0 data
+	// Call countSectors() with the side 0 data from HFE file
 	sectorCount := countSectors(side0Data)
 
 	// Assert the result equals 18

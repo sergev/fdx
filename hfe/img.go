@@ -49,38 +49,50 @@ func crc16CCITTByte(sum uint16, b byte) uint16 {
 }
 
 // mfmReader reads bits from an MFM bitstream (MSB-first byte order)
+// The HFE format stores the raw MFM-encoded bitstream where clock and data bits are interleaved.
+// In MFM encoding: each data bit is encoded as 2 bits (clock bit, data bit).
+// The stream is: C0, D0, C1, D1, C2, D2, ... where C=clock, D=data
+// We need to extract only the data bits (at odd positions: 1, 3, 5, 7, ...)
 type mfmReader struct {
-	data   []byte // MFM bitstream data
-	bitPos int    // Current bit position (0-based)
+	data   []byte // MFM bitstream data (clock+data interleaved)
+	bitPos int    // Current bit position in raw bitstream (0-based)
 }
 
 // newMFMReader creates a new MFM bitstream reader
 func newMFMReader(data []byte) *mfmReader {
 	return &mfmReader{
 		data:   data,
-		bitPos: 0,
+		bitPos: 1, // Start at position 1 to skip first clock bit and read first data bit
 	}
 }
 
-// readBit reads a single bit from the bitstream
+// readBit reads a single DATA bit from the MFM bitstream
+// In MFM encoding, data bits are at odd positions (1, 3, 5, 7, ...)
+// Clock bits are at even positions (0, 2, 4, 6, ...) and are used for synchronization
 // Returns 0, 1, or error if end of stream
 func (r *mfmReader) readBit() (int, error) {
+	// Data bits are at odd positions in the MFM stream
 	if r.bitPos >= len(r.data)*8 {
 		return -1, fmt.Errorf("end of bitstream")
 	}
 	byteIdx := r.bitPos / 8
 	bitIdx := 7 - (r.bitPos & 7) // MSB-first
 	bit := (r.data[byteIdx] >> bitIdx) & 1
-	r.bitPos++
+	// Advance by 2 to skip the next clock bit and move to next data bit
+	r.bitPos += 2
 	return int(bit), nil
 }
 
 // readHalfBit skips a half-bit (for synchronization)
+// Half-bit means we advance by 0.5 bit positions in the raw MFM stream
+// Since we're reading data bits (every 2nd bit), a half-bit means advancing by 1 raw bit
 func (r *mfmReader) readHalfBit() error {
-	// Half-bit means we advance by 0.5 bit positions
-	// In practice, we just advance by 1 bit position
-	_, err := r.readBit()
-	return err
+	// Advance by 1 bit in the raw stream (half a data bit position)
+	if r.bitPos >= len(r.data)*8 {
+		return fmt.Errorf("end of bitstream")
+	}
+	r.bitPos++
+	return nil
 }
 
 // readByte reads 8 bits and returns them as a byte
@@ -680,7 +692,7 @@ func countSectors(sideData []byte) int {
 
 	// Scan through the track looking for sector headers
 	// We'll scan until we've found a reasonable number of sectors or hit an error
-	maxIterations := 100 // Prevent infinite loops
+	maxIterations := 200 // Increased to allow scanning more of the track
 	iterations := 0
 
 	for iterations < maxIterations {
