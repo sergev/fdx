@@ -11,10 +11,10 @@ type FloppyAdapter interface {
 	// PrintStatus prints adapter status information to stdout
 	PrintStatus()
 
-	// Read reads the entire floppy disk and returns it as an HFE disk object
+	// Read reads the entire floppy disk and returns it as a disk object
 	Read(numberOfTracks int) (*hfe.Disk, error)
 
-	// Write writes data from the HFE disk object to the floppy disk
+	// Write writes data from the disk object to the floppy disk
 	Write(disk *hfe.Disk, numberOfTracks int) error
 
 	// Format formats the floppy disk

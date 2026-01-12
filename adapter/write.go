@@ -20,21 +20,21 @@ var writeCmd = &cobra.Command{
 		// Determine input filename
 		filename := args[0]
 
-		// Read HFE file
+		// Read file
 		disk, err := hfe.Read(filename)
 		if err != nil {
-			cobra.CheckErr(fmt.Errorf("failed to read HFE file: %w", err))
+			cobra.CheckErr(fmt.Errorf("failed to read file: %w", err))
 		}
 
-        // Get number of tracks to write (use minimum of HFE tracks and standard 82)
-        numberOfTracks := int(disk.Header.NumberOfTrack)
-        if numberOfTracks > 82 {
-                numberOfTracks = 82
-        }
+		// Get number of tracks to write (but no more than standard 82 tracks)
+		numberOfTracks := int(disk.Header.NumberOfTrack)
+		if numberOfTracks > 82 {
+			numberOfTracks = 82
+		}
 
-        fmt.Printf("Writing file to floppy disk\n")
-        fmt.Printf("Tracks: %d, Sides: %d, Bit Rate: %d kbps, RPM: %d\n",
-                numberOfTracks, disk.Header.NumberOfSide, disk.Header.BitRate, disk.Header.FloppyRPM)
+		fmt.Printf("Writing file to floppy disk\n")
+		fmt.Printf("Tracks: %d, Sides: %d, Bit Rate: %d kbps, RPM: %d\n",
+			numberOfTracks, disk.Header.NumberOfSide, disk.Header.BitRate, disk.Header.FloppyRPM)
 
 		// Write floppy disk using adapter interface
 		err = floppyAdapter.Write(disk, numberOfTracks)

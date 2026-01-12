@@ -29,11 +29,11 @@ var readCmd = &cobra.Command{
 			cobra.CheckErr(fmt.Errorf("failed to read floppy disk: %w", err))
 		}
 
-		// Write HFE file
-		fmt.Printf("Writing HFE file...\n")
+		// Write file
+		fmt.Printf("Writing file...\n")
 		err = hfe.Write(filename, disk, hfe.HFEVersion1)
 		if err != nil {
-			cobra.CheckErr(fmt.Errorf("failed to write HFE file: %w", err))
+			cobra.CheckErr(fmt.Errorf("failed to write file: %w", err))
 		}
 
 		fmt.Printf("Successfully read floppy disk to %s\n", filename)
