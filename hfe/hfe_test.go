@@ -434,8 +434,8 @@ func TestWriteTrack_SingleSide(t *testing.T) {
 	disk := createTestDisk(1, 1, 256)
 	tmpFile := filepath.Join(t.TempDir(), "test_write_single.hfe")
 
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
+	if err := WriteHFE(tmpFile, disk, HFEVersion3); err != nil {
+		t.Fatalf("WriteHFE() error: %v", err)
 	}
 
 	// Verify file exists and has content
@@ -444,7 +444,7 @@ func TestWriteTrack_SingleSide(t *testing.T) {
 		t.Fatalf("Stat() error: %v", err)
 	}
 	if info.Size() < BlockSize {
-		t.Errorf("Write() file too small: %d bytes", info.Size())
+		t.Errorf("WriteHFE() file too small: %d bytes", info.Size())
 	}
 }
 
@@ -452,8 +452,8 @@ func TestWriteTrack_DoubleSide(t *testing.T) {
 	disk := createTestDisk(1, 2, 256)
 	tmpFile := filepath.Join(t.TempDir(), "test_write_double.hfe")
 
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
+	if err := WriteHFE(tmpFile, disk, HFEVersion3); err != nil {
+		t.Fatalf("WriteHFE() error: %v", err)
 	}
 
 	// Verify file exists and has content
@@ -462,7 +462,7 @@ func TestWriteTrack_DoubleSide(t *testing.T) {
 		t.Fatalf("Stat() error: %v", err)
 	}
 	if info.Size() < BlockSize*2 {
-		t.Errorf("Write() file too small: %d bytes", info.Size())
+		t.Errorf("WriteHFE() file too small: %d bytes", info.Size())
 	}
 }
 
@@ -481,12 +481,12 @@ func TestRead_InvalidSignature(t *testing.T) {
 	// Use a truly invalid signature (not HXCPICFE or HXCHFEV3)
 	invalidSig := [8]byte{'I', 'N', 'V', 'A', 'L', 'I', 'D', '!'}
 	if err := binary.Write(file, binary.LittleEndian, invalidSig); err != nil {
-		t.Fatalf("Write() error: %v", err)
+		t.Fatalf("WriteHFE() error: %v", err)
 	}
 	// Pad to at least 32 bytes (minimum header size)
 	padding := make([]byte, 24)
 	if _, err := file.Write(padding); err != nil {
-		t.Fatalf("Write() padding error: %v", err)
+		t.Fatalf("WriteHFE() padding error: %v", err)
 	}
 	file.Close()
 
@@ -513,7 +513,7 @@ func TestRead_InvalidFormatRevision(t *testing.T) {
 	header := createTestHeader(1, 1)
 	header.FormatRevision = 1
 	if err := binary.Write(file, binary.LittleEndian, header); err != nil {
-		t.Fatalf("Write() error: %v", err)
+		t.Fatalf("WriteHFE() error: %v", err)
 	}
 	file.Close()
 
@@ -534,7 +534,7 @@ func TestRead_InvalidTrackCount(t *testing.T) {
 
 	header := createTestHeader(0, 1)
 	if err := binary.Write(file, binary.LittleEndian, header); err != nil {
-		t.Fatalf("Write() error: %v", err)
+		t.Fatalf("WriteHFE() error: %v", err)
 	}
 	file.Close()
 
@@ -555,7 +555,7 @@ func TestRead_InvalidSideCount(t *testing.T) {
 
 	header := createTestHeader(1, 0)
 	if err := binary.Write(file, binary.LittleEndian, header); err != nil {
-		t.Fatalf("Write() error: %v", err)
+		t.Fatalf("WriteHFE() error: %v", err)
 	}
 	file.Close()
 
@@ -679,8 +679,8 @@ func testRoundTripSampleFile(t *testing.T, filename string, writeVersion HFEVers
 
 	// Write to temporary file
 	tmpFile := filepath.Join(t.TempDir(), "test_roundtrip.hfe")
-	if err := Write(tmpFile, originalDisk, writeVersion); err != nil {
-		t.Fatalf("Write() error: %v", err)
+	if err := WriteHFE(tmpFile, originalDisk, writeVersion); err != nil {
+		t.Fatalf("WriteHFE() error: %v", err)
 	}
 
 	// Read back
@@ -722,8 +722,8 @@ func testReadTrack(t *testing.T, numTracks, numSides uint8, trackDataSize int, v
 	disk := createTestDisk(numTracks, numSides, trackDataSize)
 	tmpFile := filepath.Join(t.TempDir(), "test_track.hfe")
 
-	if err := Write(tmpFile, disk, version); err != nil {
-		t.Fatalf("Write() error: %v", err)
+	if err := WriteHFE(tmpFile, disk, version); err != nil {
+		t.Fatalf("WriteHFE() error: %v", err)
 	}
 
 	readDisk, err := Read(tmpFile)
@@ -757,13 +757,13 @@ func testWriteReadDisk(t *testing.T, disk *Disk, version HFEVersion, verifyFunc 
 	t.Helper()
 	tmpFile := filepath.Join(t.TempDir(), "test_write_read.hfe")
 
-	if err := Write(tmpFile, disk, version); err != nil {
-		t.Fatalf("Write() error: %v", err)
+	if err := WriteHFE(tmpFile, disk, version); err != nil {
+		t.Fatalf("WriteHFE() error: %v", err)
 	}
 
 	// Verify file exists
 	if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
-		t.Fatalf("Write() file was not created")
+		t.Fatalf("WriteHFE() file was not created")
 	}
 
 	// Read it back
@@ -784,13 +784,13 @@ func testWriteV1Format(t *testing.T, numTracks, numSides uint8, trackDataSize in
 	disk := createTestDisk(numTracks, numSides, trackDataSize)
 	tmpFile := filepath.Join(t.TempDir(), "test_v1.hfe")
 
-	if err := Write(tmpFile, disk, HFEVersion1); err != nil {
-		t.Fatalf("Write() v1 error: %v", err)
+	if err := WriteHFE(tmpFile, disk, HFEVersion1); err != nil {
+		t.Fatalf("WriteHFE() v1 error: %v", err)
 	}
 
 	// Verify file exists
 	if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
-		t.Fatalf("Write() v1 file was not created")
+		t.Fatalf("WriteHFE() v1 file was not created")
 	}
 
 	// Read it back and verify signature
@@ -801,27 +801,27 @@ func testWriteV1Format(t *testing.T, numTracks, numSides uint8, trackDataSize in
 
 	// Verify signature is HXCPICFE
 	if string(readDisk.Header.HeaderSignature[:]) != HFEv1Signature {
-		t.Errorf("Write() v1 signature = %s, expected %s", string(readDisk.Header.HeaderSignature[:]), HFEv1Signature)
+		t.Errorf("WriteHFE() v1 signature = %s, expected %s", string(readDisk.Header.HeaderSignature[:]), HFEv1Signature)
 	}
 
 	// Verify format revision is 0
 	if readDisk.Header.FormatRevision != 0 {
-		t.Errorf("Write() v1 format revision = %d, expected 0", readDisk.Header.FormatRevision)
+		t.Errorf("WriteHFE() v1 format revision = %d, expected 0", readDisk.Header.FormatRevision)
 	}
 
 	// Verify track data exists
 	if len(readDisk.Tracks) != int(numTracks) {
-		t.Errorf("Write() v1 track count = %d, expected %d", len(readDisk.Tracks), numTracks)
+		t.Errorf("WriteHFE() v1 track count = %d, expected %d", len(readDisk.Tracks), numTracks)
 	}
 
 	// Verify track data based on number of sides
 	for i, track := range readDisk.Tracks {
 		if len(track.Side0) == 0 {
-			t.Errorf("Write() v1 track %d side 0 is empty", i)
+			t.Errorf("WriteHFE() v1 track %d side 0 is empty", i)
 		}
 		if numSides > 1 {
 			if len(track.Side1) == 0 {
-				t.Errorf("Write() v1 track %d side 1 is empty", i)
+				t.Errorf("WriteHFE() v1 track %d side 1 is empty", i)
 			}
 		}
 	}
@@ -845,12 +845,12 @@ func TestWrite_ValidDisk(t *testing.T) {
 	testWriteReadDisk(t, disk, HFEVersion3, func(t *testing.T, original, read *Disk) {
 		// Compare headers (excluding TrackListOffset which may differ)
 		if !compareHeaders(t, original.Header, read.Header) {
-			t.Error("Write() header mismatch")
+			t.Error("WriteHFE() header mismatch")
 		}
 
 		// Verify track count
 		if len(read.Tracks) != len(original.Tracks) {
-			t.Errorf("Write() track count = %d, expected %d", len(read.Tracks), len(original.Tracks))
+			t.Errorf("WriteHFE() track count = %d, expected %d", len(read.Tracks), len(original.Tracks))
 		}
 	})
 }
@@ -859,8 +859,8 @@ func TestWrite_HeaderPadding(t *testing.T) {
 	disk := createTestDisk(1, 1, 256)
 	tmpFile := filepath.Join(t.TempDir(), "test_header_padding.hfe")
 
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
+	if err := WriteHFE(tmpFile, disk, HFEVersion3); err != nil {
+		t.Fatalf("WriteHFE() error: %v", err)
 	}
 
 	// Read raw file and check padding
@@ -878,7 +878,7 @@ func TestWrite_HeaderPadding(t *testing.T) {
 	// Check that bytes after header data (offset 32) are 0xFF
 	for i := 32; i < BlockSize; i++ {
 		if headerBuf[i] != 0xFF {
-			t.Errorf("Write() header padding at offset %d = 0x%02X, expected 0xFF", i, headerBuf[i])
+			t.Errorf("WriteHFE() header padding at offset %d = 0x%02X, expected 0xFF", i, headerBuf[i])
 		}
 	}
 }
@@ -887,8 +887,8 @@ func TestWrite_TrackListPadding(t *testing.T) {
 	disk := createTestDisk(1, 1, 256)
 	tmpFile := filepath.Join(t.TempDir(), "test_tracklist_padding.hfe")
 
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
+	if err := WriteHFE(tmpFile, disk, HFEVersion3); err != nil {
+		t.Fatalf("WriteHFE() error: %v", err)
 	}
 
 	// Read raw file and check track list padding
@@ -914,7 +914,7 @@ func TestWrite_TrackListPadding(t *testing.T) {
 	numEntries := int(disk.Header.NumberOfTrack)
 	for i := numEntries * entrySize; i < BlockSize; i++ {
 		if trackListBuf[i] != 0xFF {
-			t.Errorf("Write() track list padding at offset %d = 0x%02X, expected 0xFF", i, trackListBuf[i])
+			t.Errorf("WriteHFE() track list padding at offset %d = 0x%02X, expected 0xFF", i, trackListBuf[i])
 		}
 	}
 }
@@ -939,8 +939,8 @@ func TestRoundTrip_GeneratedData(t *testing.T) {
 
 	// Write to temporary file
 	tmpFile := filepath.Join(t.TempDir(), "test_roundtrip_gen.hfe")
-	if err := Write(tmpFile, disk, HFEVersion3); err != nil {
-		t.Fatalf("Write() error: %v", err)
+	if err := WriteHFE(tmpFile, disk, HFEVersion3); err != nil {
+		t.Fatalf("WriteHFE() error: %v", err)
 	}
 
 	// Read back
@@ -1184,17 +1184,17 @@ func TestWriteV1DoubleSide(t *testing.T) {
 }
 
 func TestWrite_RejectV2(t *testing.T) {
-	// Test that Write() rejects v2 version
+	// Test that WriteHFE() rejects v2 version
 	disk := createTestDisk(1, 1, 256)
 	tmpFile := filepath.Join(t.TempDir(), "test_v2_reject.hfe")
 
 	// Try to write with v2 (should fail)
-	err := Write(tmpFile, disk, HFEVersion(2))
+	err := WriteHFE(tmpFile, disk, HFEVersion(2))
 	if err == nil {
-		t.Fatalf("Write() with v2: expected error, got nil")
+		t.Fatalf("WriteHFE() with v2: expected error, got nil")
 	}
 	if !strings.Contains(err.Error(), "invalid HFE version") {
-		t.Errorf("Write() with v2: expected error about invalid version, got %v", err)
+		t.Errorf("WriteHFE() with v2: expected error about invalid version, got %v", err)
 	}
 }
 
@@ -1204,8 +1204,8 @@ func TestWriteV1RoundTrip(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "test_v1_roundtrip.hfe")
 
 	// Write v1 format
-	if err := Write(tmpFile, disk, HFEVersion1); err != nil {
-		t.Fatalf("Write() v1 error: %v", err)
+	if err := WriteHFE(tmpFile, disk, HFEVersion1); err != nil {
+		t.Fatalf("WriteHFE() v1 error: %v", err)
 	}
 
 	// Read it back
@@ -1290,7 +1290,7 @@ func TestRead_RejectV2(t *testing.T) {
 	headerData[25] = header.Track0S1Encoding
 	copy(headerBuf, headerData)
 	if _, err := file.Write(headerBuf); err != nil {
-		t.Fatalf("Write() header error: %v", err)
+		t.Fatalf("WriteHFE() header error: %v", err)
 	}
 
 	// Write minimal track list
@@ -1301,7 +1301,7 @@ func TestRead_RejectV2(t *testing.T) {
 	binary.LittleEndian.PutUint16(trackListBuf[0:2], 2)   // Track offset
 	binary.LittleEndian.PutUint16(trackListBuf[2:4], 512) // Track length
 	if _, err := file.Write(trackListBuf); err != nil {
-		t.Fatalf("Write() track list error: %v", err)
+		t.Fatalf("WriteHFE() track list error: %v", err)
 	}
 
 	// Write minimal track data
@@ -1310,7 +1310,7 @@ func TestRead_RejectV2(t *testing.T) {
 		trackData[i] = 0xFF
 	}
 	if _, err := file.Write(trackData); err != nil {
-		t.Fatalf("Write() track data error: %v", err)
+		t.Fatalf("WriteHFE() track data error: %v", err)
 	}
 	file.Close()
 
@@ -1330,8 +1330,8 @@ func TestWriteV1V3Compatibility(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "test_v1_compat.hfe")
 
 	// Write v1 format
-	if err := Write(tmpFile, disk, HFEVersion1); err != nil {
-		t.Fatalf("Write() v1 error: %v", err)
+	if err := WriteHFE(tmpFile, disk, HFEVersion1); err != nil {
+		t.Fatalf("WriteHFE() v1 error: %v", err)
 	}
 
 	// Read it back (should work with existing Read function)
@@ -1355,8 +1355,8 @@ func TestWriteV1NoOpcodes(t *testing.T) {
 	disk := createTestDisk(1, 1, 256)
 	tmpFile := filepath.Join(t.TempDir(), "test_v1_no_opcodes.hfe")
 
-	if err := Write(tmpFile, disk, HFEVersion1); err != nil {
-		t.Fatalf("Write() v1 error: %v", err)
+	if err := WriteHFE(tmpFile, disk, HFEVersion1); err != nil {
+		t.Fatalf("WriteHFE() v1 error: %v", err)
 	}
 
 	// Read raw file and check track data doesn't contain opcodes
@@ -1385,7 +1385,40 @@ func TestWriteV1NoOpcodes(t *testing.T) {
 	for i := len(trackBuf) - 10; i < len(trackBuf); i++ {
 		// Padding should be 0xFF, not 0xF0 (NOP opcode)
 		if trackBuf[i] == NOP_OPCODE {
-			t.Errorf("Write() v1 track data at offset %d contains NOP opcode (0xF0), expected 0xFF padding", i)
+			t.Errorf("WriteHFE() v1 track data at offset %d contains NOP opcode (0xF0), expected 0xFF padding", i)
 		}
+	}
+}
+
+func TestCountSectors(t *testing.T) {
+	// Find the test file
+	sampleFile := findSampleFile(t, "fat12v1.hfe")
+	if sampleFile == "" {
+		return // Test was skipped
+	}
+
+	// Load the HFE file
+	disk, err := ReadHFE(sampleFile)
+	if err != nil {
+		t.Fatalf("ReadHFE() error: %v", err)
+	}
+
+	// Verify we have at least one track
+	if len(disk.Tracks) == 0 {
+		t.Fatalf("ReadHFE() returned disk with no tracks")
+	}
+
+	// Extract side #0 data from track #0
+	side0Data := disk.Tracks[0].Side0
+	if len(side0Data) == 0 {
+		t.Fatalf("Track 0 side 0 data is empty")
+	}
+
+	// Call countSectors() with the side 0 data
+	sectorCount := countSectors(side0Data)
+
+	// Assert the result equals 18
+	if sectorCount != 18 {
+		t.Errorf("countSectors() = %d, expected 18", sectorCount)
 	}
 }
