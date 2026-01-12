@@ -2,6 +2,7 @@ package hfe
 
 import (
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -244,9 +245,414 @@ func (r *mfmReader) readSectorIBMPC(cylinder, head int) (int, []byte, error) {
 	}
 }
 
+// Constants for IBM PC floppy format
+const (
+	sectorSize  = 512
+	indexGap    = 42   // bytes before first sector
+	dataGap     = 22   // bytes between sector mark and data
+	sectorGap9  = 80   // bytes for 9 sectors per track
+	sectorGap10 = 46   // bytes for 10+ sectors per track
+	gapByte     = 0x4E // standard gap byte
+)
+
+// detectFormatFromSize detects floppy format from file size
+// Returns: tracks, sides, sectorsPerTrack
+func detectFormatFromSize(fileSize int64) (tracks, sides, sectorsPerTrack int, err error) {
+	// File size must be divisible by sector size
+	if fileSize%sectorSize != 0 {
+		return 0, 0, 0, fmt.Errorf("file size %d is not divisible by sector size %d", fileSize, sectorSize)
+	}
+
+	totalSectors := int(fileSize / sectorSize)
+
+	// Try common floppy format combinations
+	commonFormats := []struct {
+		tracks          int
+		sides           int
+		sectorsPerTrack int
+		totalSectors    int
+	}{
+		{80, 2, 18, 2880}, // 1.44MB
+		{80, 2, 9, 1440},  // 720KB
+		{40, 2, 9, 720},   // 360KB
+		{80, 2, 15, 2400}, // 1.2MB
+	}
+
+	for _, format := range commonFormats {
+		if totalSectors == format.totalSectors {
+			return format.tracks, format.sides, format.sectorsPerTrack, nil
+		}
+	}
+
+	// If no match, try to factor total sectors
+	// Try common side counts (1 or 2)
+	for sides := 1; sides <= 2; sides++ {
+		if totalSectors%sides != 0 {
+			continue
+		}
+		sectorsPerSide := totalSectors / sides
+
+		// Try common track counts
+		for tracks := 40; tracks <= 80; tracks++ {
+			if sectorsPerSide%tracks == 0 {
+				sectorsPerTrack := sectorsPerSide / tracks
+				if sectorsPerTrack >= 9 && sectorsPerTrack <= 18 {
+					return tracks, sides, sectorsPerTrack, nil
+				}
+			}
+		}
+	}
+
+	// Default to 1.44MB format if ambiguous
+	return 80, 2, 18, nil
+}
+
+// mfmWriter writes MFM-encoded bits to a buffer
+type mfmWriter struct {
+	buffer      []byte // Output buffer
+	bitPos      int    // Current bit position (0-based)
+	lastDataBit int    // Last data bit for clock bit calculation
+}
+
+// newMFMWriter creates a new MFM writer
+func newMFMWriter() *mfmWriter {
+	return &mfmWriter{
+		buffer:      make([]byte, 0, 1024),
+		bitPos:      0,
+		lastDataBit: 0, // Start with 0 for clock bit calculation
+	}
+}
+
+// ensureByte ensures we have space for at least one more byte
+func (w *mfmWriter) ensureByte() {
+	neededBytes := (w.bitPos + 7) / 8
+	if neededBytes >= len(w.buffer) {
+		w.buffer = append(w.buffer, 0)
+	}
+}
+
+// writeBit writes a single MFM bit (clock + data)
+// For normal encoding: clock bit depends on previous data bit
+// For special markers: we write specific bit patterns
+func (w *mfmWriter) writeBit(dataBit int) {
+	w.ensureByte()
+
+	// Calculate clock bit based on previous data bit
+	clockBit := 0
+	if w.lastDataBit == 0 {
+		clockBit = 1
+	}
+
+	// Write clock bit (MSB-first)
+	byteIdx := w.bitPos / 8
+	bitIdx := 7 - (w.bitPos % 8)
+	if clockBit != 0 {
+		w.buffer[byteIdx] |= 1 << bitIdx
+	}
+	w.bitPos++
+
+	// Write data bit
+	w.ensureByte()
+	byteIdx = w.bitPos / 8
+	bitIdx = 7 - (w.bitPos % 8)
+	if dataBit != 0 {
+		w.buffer[byteIdx] |= 1 << bitIdx
+	}
+	w.bitPos++
+
+	w.lastDataBit = dataBit
+}
+
+// writeHalfBit writes a half-bit (for MFM violations in sync markers)
+// Half-bit means we write the data bit but with a clock bit violation
+// This creates the sync pattern that violates normal MFM rules
+func (w *mfmWriter) writeHalfBit(dataBit int) {
+	w.ensureByte()
+
+	// For half-bit violations, we write the clock bit as 0 (violation)
+	// and then the data bit
+	// Clock bit is always 0 for half-bit violations, so we just advance position
+	byteIdx := w.bitPos / 8
+	_ = byteIdx // Clock bit is 0, so we don't set it
+	w.bitPos++
+
+	// Write data bit
+	w.ensureByte()
+	byteIdx = w.bitPos / 8
+	bitIdx := 7 - (w.bitPos % 8)
+	if dataBit != 0 {
+		w.buffer[byteIdx] |= 1 << bitIdx
+	}
+	w.bitPos++
+
+	// Update last data bit for next normal encoding
+	w.lastDataBit = dataBit
+}
+
+// writeByte writes a data byte, encoding it as MFM (16 bits = 2 bytes)
+func (w *mfmWriter) writeByte(data byte) {
+	// Encode each bit of the data byte
+	for i := 7; i >= 0; i-- {
+		dataBit := int((data >> i) & 1)
+		w.writeBit(dataBit)
+	}
+}
+
+// writeGap writes n bytes of gap (repeated gapByte)
+func (w *mfmWriter) writeGap(n int) {
+	for i := 0; i < n; i++ {
+		w.writeByte(gapByte)
+	}
+}
+
+// writeMarker writes the A1 sync marker (12 bytes of 0x00 + 3 bytes of A1 with MFM violation)
+// From ibmpc.c write_marker()
+// A1 = 0xA1 = 10100001, but with MFM violations in bits 2 and 1 (half-bits)
+func (w *mfmWriter) writeMarker() {
+	// Twelve bytes of zeros (normal MFM encoding)
+	for i := 0; i < 12; i++ {
+		w.writeByte(0)
+	}
+
+	// Three bytes of A1 violating encoding in the sixth bit (bit 2 from MSB)
+	// Pattern from C code: 1, 0, 1, 0, 0, [half-bit], [half-bit], 0, 1
+	// This encodes A1 (10100001) but with violations
+	for i := 0; i < 3; i++ {
+		w.writeBit(1)     // data bit 7
+		w.writeBit(0)     // data bit 6
+		w.writeBit(1)     // data bit 5
+		w.writeBit(0)     // data bit 4
+		w.writeBit(0)     // data bit 3
+		w.writeHalfBit(0) // data bit 2 (half-bit violation)
+		w.writeHalfBit(0) // data bit 1 (half-bit violation)
+		w.writeBit(0)     // data bit 0
+		w.writeBit(1)     // This completes the A1 pattern (10100001)
+	}
+}
+
+// writeIndexMarker writes the index marker (C2 sync)
+// From ibmpc.c write_index_marker()
+// C2 = 0xC2 = 11000010, but with MFM violations in bits 2 and 1 (half-bits)
+func (w *mfmWriter) writeIndexMarker() {
+	// Twelve bytes of zeros (normal MFM encoding)
+	for i := 0; i < 12; i++ {
+		w.writeByte(0)
+	}
+
+	// Three bytes of C2 violating encoding in the sixth bit (bit 2 from MSB)
+	// Pattern from C code: 1, 1, 0, 0, 0, [half-bit], [half-bit], 1, 0
+	// This encodes C2 (11000010) but with violations
+	for i := 0; i < 3; i++ {
+		w.writeBit(1)     // data bit 7
+		w.writeBit(1)     // data bit 6
+		w.writeBit(0)     // data bit 5
+		w.writeBit(0)     // data bit 4
+		w.writeBit(0)     // data bit 3
+		w.writeHalfBit(0) // data bit 2 (half-bit violation)
+		w.writeHalfBit(0) // data bit 1 (half-bit violation)
+		w.writeBit(1)     // data bit 0
+		w.writeBit(0)     // This completes the C2 pattern (11000010)
+	}
+}
+
+// fillTrack fills remaining track space with gap bytes
+func (w *mfmWriter) fillTrack() {
+	// Fill to a reasonable track size (approximately 6250 bytes for 1.44MB at 500 kbps)
+	// For now, we'll let the caller determine the exact size needed
+	// This is a placeholder - actual implementation may need track size calculation
+}
+
+// getData returns the MFM-encoded buffer
+func (w *mfmWriter) getData() []byte {
+	// Trim to actual size used
+	actualBytes := (w.bitPos + 7) / 8
+	if actualBytes < len(w.buffer) {
+		return w.buffer[:actualBytes]
+	}
+	return w.buffer
+}
+
+// encodeTrackIBMPC encodes a track in IBM PC format
+// sectors: array of sector data (512 bytes each), indexed by sector number
+// cylinder: cylinder number (0-based)
+// head: head number (0 or 1)
+// sectorsPerTrack: number of sectors per track
+func encodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int) []byte {
+	writer := newMFMWriter()
+
+	// Determine sector gap based on sectors per track
+	sectorGap := sectorGap10
+	if sectorsPerTrack == 9 {
+		sectorGap = sectorGap9
+	}
+
+	// Index gap (before first sector)
+	writer.writeGap(indexGap)
+
+	// Write each sector
+	for s := 0; s < sectorsPerTrack; s++ {
+		if s > 0 {
+			writer.writeGap(sectorGap)
+		}
+
+		// Sector marker (A1 sync)
+		writer.writeMarker()
+
+		// Sector header tag
+		writer.writeByte(0xFE)
+
+		// Sector identifier: cylinder, head, sector, size
+		writer.writeByte(byte(cylinder))
+		writer.writeByte(byte(head))
+		writer.writeByte(byte(s + 1)) // Sector number (1-based)
+		writer.writeByte(2)           // Size code (2 = 512 bytes)
+
+		// Calculate header CRC
+		sum := crc16CCITTByte(0xb230, byte(cylinder))
+		sum = crc16CCITTByte(sum, byte(head))
+		sum = crc16CCITTByte(sum, byte(s+1))
+		sum = crc16CCITTByte(sum, 2)
+
+		// Write header CRC
+		writer.writeByte(byte(sum >> 8))
+		writer.writeByte(byte(sum))
+
+		// Data gap
+		writer.writeGap(dataGap)
+
+		// Data marker (A1 sync)
+		writer.writeMarker()
+
+		// Data tag
+		writer.writeByte(0xFB)
+
+		// Sector data
+		sectorData := sectors[s]
+		if sectorData == nil {
+			// Missing sector, write zeros
+			sectorData = make([]byte, sectorSize)
+		}
+		for _, b := range sectorData {
+			writer.writeByte(b)
+		}
+
+		// Calculate data CRC
+		sum = crc16CCITTByte(0xcdb4, 0xFB)
+		sum = crc16CCITT(sum, sectorData)
+
+		// Write data CRC
+		writer.writeByte(byte(sum >> 8))
+		writer.writeByte(byte(sum))
+	}
+
+	// Fill remaining track (approximate - actual size depends on bit rate)
+	// For 1.44MB at 500 kbps, track is approximately 6250 bytes
+	// We'll fill to a reasonable size
+	trackSize := 6250 // Approximate track size in bytes
+	currentSize := len(writer.getData())
+	if currentSize < trackSize {
+		writer.writeGap(trackSize - currentSize)
+	}
+
+	return writer.getData()
+}
+
 // Read a file in IMG or IMA format and return a Disk structure.
 func ReadIMG(filename string) (*Disk, error) {
-	return nil, fmt.Errorf("IMG format not yet implemented")
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// Get file size
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %w", err)
+	}
+	fileSize := fileInfo.Size()
+
+	// Detect format from file size
+	tracks, sides, sectorsPerTrack, err := detectFormatFromSize(fileSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect format: %w", err)
+	}
+
+	// Calculate number of cylinders
+	cylinders := tracks / sides
+	if tracks%sides != 0 {
+		return nil, fmt.Errorf("invalid format: tracks %d not divisible by sides %d", tracks, sides)
+	}
+
+	// Read all sectors
+	totalSectors := tracks * sectorsPerTrack
+	sectors := make([][]byte, totalSectors)
+	for i := 0; i < totalSectors; i++ {
+		sectorData := make([]byte, sectorSize)
+		n, err := file.Read(sectorData)
+		if err == io.EOF && n == 0 {
+			break
+		}
+		if err != nil && err != io.EOF {
+			return nil, fmt.Errorf("failed to read sector %d: %w", i, err)
+		}
+		if n < sectorSize {
+			return nil, fmt.Errorf("incomplete sector %d: read %d bytes, expected %d", i, n, sectorSize)
+		}
+		sectors[i] = sectorData
+	}
+
+	// Group sectors by track and encode
+	disk := &Disk{
+		Header: Header{
+			NumberOfTrack:       uint8(cylinders),
+			NumberOfSide:        uint8(sides),
+			TrackEncoding:       ENC_ISOIBM_MFM,
+			BitRate:             500, // 500 kbps for standard floppy
+			FloppyRPM:           300, // 300 RPM
+			FloppyInterfaceMode: IFM_IBMPC_DD,
+			WriteProtected:      0xFF,
+			WriteAllowed:        0xFF,
+			SingleStep:          0xFF,
+			Track0S0AltEncoding: 0xFF,
+			Track0S0Encoding:    ENC_ISOIBM_MFM,
+			Track0S1AltEncoding: 0xFF,
+			Track0S1Encoding:    ENC_ISOIBM_MFM,
+		},
+		Tracks: make([]TrackData, cylinders),
+	}
+
+	// Process each cylinder
+	for cyl := 0; cyl < cylinders; cyl++ {
+		// Process each side
+		for head := 0; head < sides; head++ {
+			// Collect sectors for this track
+			trackSectors := make([][]byte, sectorsPerTrack)
+			for s := 0; s < sectorsPerTrack; s++ {
+				// Calculate sector index: track * sectorsPerTrack + sector
+				track := cyl*sides + head
+				sectorIndex := track*sectorsPerTrack + s
+				if sectorIndex < len(sectors) {
+					trackSectors[s] = sectors[sectorIndex]
+				} else {
+					// Missing sector, use zeros
+					trackSectors[s] = make([]byte, sectorSize)
+				}
+			}
+
+			// Encode track to MFM
+			mfmData := encodeTrackIBMPC(trackSectors, cyl, head, sectorsPerTrack)
+
+			// Store in appropriate side
+			if head == 0 {
+				disk.Tracks[cyl].Side0 = mfmData
+			} else {
+				disk.Tracks[cyl].Side1 = mfmData
+			}
+		}
+	}
+
+	return disk, nil
 }
 
 // Write disk contents to an IMG or IMA format file.
