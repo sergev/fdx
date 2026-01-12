@@ -11,6 +11,7 @@ type ImageFormat int
 const (
 	// ImageFormatUnknown represents an unknown or unrecognized format
 	ImageFormatUnknown ImageFormat = iota
+	ImageFormatADF                 // ADF format - Amiga Disk File
 	ImageFormatCP2                 // CP2 format - Central Point Software's Copy-II-PC
 	ImageFormatDCF                 // DCF format - Disk Copy Fast utility
 	ImageFormatEPL                 // EPL format - EPLCopy utility
@@ -28,6 +29,8 @@ const (
 // String returns the string representation of the ImageFormat
 func (f ImageFormat) String() string {
 	switch f {
+	case ImageFormatADF:
+		return "ADF"
 	case ImageFormatCP2:
 		return "CP2"
 	case ImageFormatDCF:
@@ -70,6 +73,8 @@ func DetectImageFormat(filename string) ImageFormat {
 	ext = strings.ToLower(ext[1:])
 
 	switch ext {
+	case "adf":
+		return ImageFormatADF
 	case "cp2":
 		return ImageFormatCP2
 	case "dcf":

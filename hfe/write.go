@@ -12,6 +12,8 @@ func Write(filename string, disk *Disk) error {
 	switch format {
 	case ImageFormatHFE:
 		return WriteHFE(filename, disk, HFEVersion1)
+	case ImageFormatADF:
+		return WriteADF(filename, disk)
 	case ImageFormatCP2:
 		return WriteCP2(filename, disk)
 	case ImageFormatDCF:

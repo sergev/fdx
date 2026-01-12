@@ -15,6 +15,8 @@ func Read(filename string) (*Disk, error) {
 	switch format {
 	case ImageFormatHFE:
 		return ReadHFE(filename)
+	case ImageFormatADF:
+		return ReadADF(filename)
 	case ImageFormatCP2:
 		return ReadCP2(filename)
 	case ImageFormatDCF:
