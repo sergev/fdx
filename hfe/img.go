@@ -61,37 +61,37 @@ type mfmReader struct {
 func newMFMReader(data []byte) *mfmReader {
 	return &mfmReader{
 		data:   data,
-		bitPos: 1, // Start at position 1 to skip first clock bit and read first data bit
+		bitPos: 0, // Start at clock bit; readBit will advance two half-bits
 	}
 }
 
-// readBit reads a single DATA bit from the MFM bitstream
-// In MFM encoding, data bits are at odd positions (1, 3, 5, 7, ...)
-// Clock bits are at even positions (0, 2, 4, 6, ...) and are used for synchronization
-// Returns 0, 1, or error if end of stream
-func (r *mfmReader) readBit() (int, error) {
-	// Data bits are at odd positions in the MFM stream
+// Read "half" bit, which means a raw next bit from MFM stream.
+func (r *mfmReader) readHalfBit() (int, error) {
 	if r.bitPos >= len(r.data)*8 {
 		return -1, fmt.Errorf("end of bitstream")
 	}
 	byteIdx := r.bitPos / 8
 	bitIdx := 7 - (r.bitPos & 7) // MSB-first
 	bit := (r.data[byteIdx] >> bitIdx) & 1
-	// Advance by 2 to skip the next clock bit and move to next data bit
-	r.bitPos += 2
+	r.bitPos++
 	return int(bit), nil
 }
 
-// readHalfBit skips a half-bit (for synchronization)
-// Half-bit means we advance by 0.5 bit positions in the raw MFM stream
-// Since we're reading data bits (every 2nd bit), a half-bit means advancing by 1 raw bit
-func (r *mfmReader) readHalfBit() error {
-	// Advance by 1 bit in the raw stream (half a data bit position)
-	if r.bitPos >= len(r.data)*8 {
-		return fmt.Errorf("end of bitstream")
+// Read a single DATA bit from the MFM bitstream.
+// Returns 0, 1, or error if end of stream.
+func (r *mfmReader) readBit() (int, error) {
+	// Ignore the first half-bit (clock)
+	_, err := r.readHalfBit()
+	if err != nil {
+		return -1, err
 	}
-	r.bitPos++
-	return nil
+
+	// Return the second half-bit (data bit)
+	bit, err := r.readHalfBit()
+	if err != nil {
+		return -1, err
+	}
+	return bit, nil
 }
 
 // readByte reads 8 bits and returns them as a byte
@@ -124,7 +124,9 @@ func (r *mfmReader) scanIBMPC() (int, error) {
 
 		// All ones - synchronize to half-bit
 		if history == 0xffffffff {
-			r.readHalfBit()
+			if _, err := r.readHalfBit(); err != nil {
+				return -1, err
+			}
 			history = 0
 			continue
 		}
@@ -322,80 +324,52 @@ type mfmWriter struct {
 	buffer      []byte // Output buffer
 	bitPos      int    // Current bit position (0-based)
 	lastDataBit int    // Last data bit for clock bit calculation
+	maxHalfBits int    // Maximum number of half-bits allowed for this track
 }
 
-// newMFMWriter creates a new MFM writer
-func newMFMWriter() *mfmWriter {
+// Create a new MFM writer.
+func newMFMWriter(maxHalfBits int) *mfmWriter {
 	return &mfmWriter{
 		buffer:      make([]byte, 0, 1024),
 		bitPos:      0,
 		lastDataBit: 0, // Start with 0 for clock bit calculation
+		maxHalfBits: maxHalfBits,
 	}
 }
 
-// ensureByte ensures we have space for at least one more byte
-func (w *mfmWriter) ensureByte() {
+// Write a "half" bit, which means one MFM bit
+func (w *mfmWriter) writeHalfBit(bitValue int) {
+	if w.bitPos >= w.maxHalfBits {
+		// The track has ended.
+		return
+	}
+
+	// Ensure we have space for at least one more byte.
 	neededBytes := (w.bitPos + 7) / 8
 	if neededBytes >= len(w.buffer) {
 		w.buffer = append(w.buffer, 0)
 	}
+
+	// Write MFM bit
+	if bitValue != 0 {
+		byteIdx := w.bitPos / 8
+		bitIdx := 7 - (w.bitPos % 8)
+		w.buffer[byteIdx] |= 1 << bitIdx
+	}
+	w.bitPos++
 }
 
-// writeBit writes a single MFM bit (clock + data)
-// For normal encoding: clock bit depends on previous data bit
-// For special markers: we write specific bit patterns
+// Write one data bit, which means two MFM bits: clock + data.
 func (w *mfmWriter) writeBit(dataBit int) {
-	w.ensureByte()
-
-	// Calculate clock bit based on previous data bit
-	clockBit := 0
-	if w.lastDataBit == 0 {
-		clockBit = 1
-	}
-
-	// Write clock bit (MSB-first)
-	byteIdx := w.bitPos / 8
-	bitIdx := 7 - (w.bitPos % 8)
-	if clockBit != 0 {
-		w.buffer[byteIdx] |= 1 << bitIdx
-	}
-	w.bitPos++
-
-	// Write data bit
-	w.ensureByte()
-	byteIdx = w.bitPos / 8
-	bitIdx = 7 - (w.bitPos % 8)
 	if dataBit != 0 {
-		w.buffer[byteIdx] |= 1 << bitIdx
+		// Encoding a one.
+		w.writeHalfBit(0)
+		w.writeHalfBit(1)
+	} else {
+		// Encoding a zero.
+		w.writeHalfBit(w.lastDataBit ^ 1)
+		w.writeHalfBit(0)
 	}
-	w.bitPos++
-
-	w.lastDataBit = dataBit
-}
-
-// writeHalfBit writes a half-bit (for MFM violations in sync markers)
-// Half-bit means we write the data bit but with a clock bit violation
-// This creates the sync pattern that violates normal MFM rules
-func (w *mfmWriter) writeHalfBit(dataBit int) {
-	w.ensureByte()
-
-	// For half-bit violations, we write the clock bit as 0 (violation)
-	// and then the data bit
-	// Clock bit is always 0 for half-bit violations, so we just advance position
-	byteIdx := w.bitPos / 8
-	_ = byteIdx // Clock bit is 0, so we don't set it
-	w.bitPos++
-
-	// Write data bit
-	w.ensureByte()
-	byteIdx = w.bitPos / 8
-	bitIdx := 7 - (w.bitPos % 8)
-	if dataBit != 0 {
-		w.buffer[byteIdx] |= 1 << bitIdx
-	}
-	w.bitPos++
-
-	// Update last data bit for next normal encoding
 	w.lastDataBit = dataBit
 }
 
@@ -487,8 +461,8 @@ func (w *mfmWriter) getData() []byte {
 // cylinder: cylinder number (0-based)
 // head: head number (0 or 1)
 // sectorsPerTrack: number of sectors per track
-func encodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int) []byte {
-	writer := newMFMWriter()
+func encodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int, maxHalfBits int) []byte {
+	writer := newMFMWriter(maxHalfBits)
 
 	// Determine sector gap based on sectors per track
 	sectorGap := sectorGap10
@@ -636,6 +610,9 @@ func ReadIMG(filename string) (*Disk, error) {
 		disk.Header.FloppyRPM = 360
 	}
 
+	// Max track length in MFM bits
+	maxHalfBits := int(disk.Header.BitRate) * 1000 * 60 / int(disk.Header.FloppyRPM) * 2
+
 	// Process each cylinder
 	for cyl := 0; cyl < cylinders; cyl++ {
 		// Process each side
@@ -650,7 +627,7 @@ func ReadIMG(filename string) (*Disk, error) {
 			}
 
 			// Encode track to MFM
-			mfmData := encodeTrackIBMPC(trackSectors, cyl, head, sectorsPerTrack)
+			mfmData := encodeTrackIBMPC(trackSectors, cyl, head, sectorsPerTrack, maxHalfBits)
 
 			// Store in appropriate side
 			if head == 0 {
@@ -675,13 +652,7 @@ func countSectorsIBMPC(sideData []byte) int {
 	sectors := make(map[int]bool) // Track unique sector numbers (0-based)
 
 	// Scan through the track looking for sector headers
-	// We'll scan until we've found a reasonable number of sectors or hit an error
-	maxIterations := 200 // Increased to allow scanning more of the track
-	iterations := 0
-
-	for iterations < maxIterations {
-		iterations++
-
+	for {
 		// Scan for sector header marker (tag 0xFE)
 		tag, err := reader.scanIBMPC()
 		if err != nil {
@@ -730,12 +701,6 @@ func countSectorsIBMPC(sideData []byte) int {
 			continue
 		}
 
-		// Verify cylinder and head match (cylinder 0, head 0)
-		if readCylinder != 0 || readHead != 0 {
-			// Wrong track, continue searching
-			continue
-		}
-
 		// Verify size (should be 2 for 512-byte sectors)
 		if size != 2 {
 			// Wrong size, continue searching
@@ -747,14 +712,7 @@ func countSectorsIBMPC(sideData []byte) int {
 		if sectorNum >= 0 {
 			sectors[sectorNum] = true
 		}
-
-		// If we've found a reasonable number of unique sectors, we can stop
-		// The maximum valid value is 36, so if we've found more than that, something's wrong
-		if len(sectors) > 36 {
-			break
-		}
 	}
-
 	return len(sectors)
 }
 

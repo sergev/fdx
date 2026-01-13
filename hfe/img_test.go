@@ -47,7 +47,7 @@ func TestMfmWriterReaderRoundTrip(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Step 1: Write bytes with mfmWriter
-			writer := newMFMWriter()
+			writer := newMFMWriter(200000)
 			for _, b := range tc.inputBytes {
 				writer.writeByte(b)
 			}
@@ -112,11 +112,11 @@ func TestMfmWriterReaderRoundTrip(t *testing.T) {
 
 			// If not matched, try reading with a phase offset (skip one bit)
 			if !matched {
-				// Try reading from offset position 0 (instead of 1)
-				// Create a reader that starts at bit position 0
-				reader2 := &mfmReader{
-					data:   mfmOutput,
-					bitPos: 0, // Start at 0 instead of 1
+				// Try reading with a phase offset by advancing a half-bit
+				reader2 := newMFMReader(mfmOutput)
+				// advance one half-bit to shift phase
+				if _, err := reader2.readHalfBit(); err != nil {
+					t.Fatalf("Failed to advance phase: %v", err)
 				}
 				readBytes2 := make([]byte, 0, len(tc.inputBytes))
 				for i := 0; i < len(tc.inputBytes); i++ {
@@ -221,7 +221,7 @@ func TestEncodeTrackIBMPC_CountSectors(t *testing.T) {
 			}
 
 			// Encode track using encodeTrackIBMPC (cylinder 0, head 0)
-			encodedTrack := encodeTrackIBMPC(sectors, 0, 0, tc.sectorsPerTrack)
+			encodedTrack := encodeTrackIBMPC(sectors, 0, 0, tc.sectorsPerTrack, 200000)
 
 			// Verify encoded track is not empty
 			if len(encodedTrack) == 0 {
