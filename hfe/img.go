@@ -2,7 +2,6 @@ package hfe
 
 import (
 	"fmt"
-	"io"
 	"os"
 )
 
@@ -595,10 +594,7 @@ func ReadIMG(filename string) (*Disk, error) {
 	for i := 0; i < totalSectors; i++ {
 		sectorData := make([]byte, sectorSize)
 		n, err := file.Read(sectorData)
-		if err == io.EOF && n == 0 {
-			break
-		}
-		if err != nil && err != io.EOF {
+		if err != nil {
 			return nil, fmt.Errorf("failed to read sector %d: %w", i, err)
 		}
 		if n < sectorSize {
@@ -650,12 +646,7 @@ func ReadIMG(filename string) (*Disk, error) {
 				// Calculate sector index: track * sectorsPerTrack + sector
 				track := cyl*sides + head
 				sectorIndex := track*sectorsPerTrack + s
-				if sectorIndex < len(sectors) {
-					trackSectors[s] = sectors[sectorIndex]
-				} else {
-					// Missing sector, use zeros
-					trackSectors[s] = make([]byte, sectorSize)
-				}
+				trackSectors[s] = sectors[sectorIndex]
 			}
 
 			// Encode track to MFM
@@ -672,10 +663,10 @@ func ReadIMG(filename string) (*Disk, error) {
 	return disk, nil
 }
 
-// countSectors scans side 0 of track 0 and returns the number of sectors.
+// Scan side 0 of track 0 and returns the number of sectors.
 // It counts unique sector numbers found in valid sector headers for cylinder 0, head 0.
 // Returns the sector count (valid values: 8-23, 36).
-func countSectors(sideData []byte) int {
+func countSectorsIBMPC(sideData []byte) int {
 	if len(sideData) == 0 {
 		return 0
 	}
@@ -784,7 +775,7 @@ func WriteIMG(filename string, disk *Disk) error {
 		numCylinders = 80
 	}
 	numHeads := int(disk.Header.NumberOfSide)
-	numSectorsPerTrack := countSectors(disk.Tracks[0].Side0)
+	numSectorsPerTrack := countSectorsIBMPC(disk.Tracks[0].Side0)
 	if numSectorsPerTrack < 8 || (numSectorsPerTrack > 23 && numSectorsPerTrack != 36) {
 		return fmt.Errorf("invalid number of sectors per track: %d (valid values: 8-23, 36)", numSectorsPerTrack)
 	}

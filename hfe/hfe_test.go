@@ -1390,7 +1390,7 @@ func TestWriteV1NoOpcodes(t *testing.T) {
 	}
 }
 
-func TestCountSectors(t *testing.T) {
+func TestCountSectorsIBMPC(t *testing.T) {
 	// Find the test file
 	sampleFile := findSampleFile(t, "fat12v1.hfe")
 	if sampleFile == "" {
@@ -1414,11 +1414,11 @@ func TestCountSectors(t *testing.T) {
 		t.Fatalf("Track 0 side 0 data is empty")
 	}
 
-	// Call countSectors() with the side 0 data from HFE file
-	sectorCount := countSectors(side0Data)
+	// Call countSectorsIBMPC() with the side 0 data from HFE file
+	sectorCount := countSectorsIBMPC(side0Data)
 
 	// Assert the result equals 18
 	if sectorCount != 18 {
-		t.Errorf("countSectors() = %d, expected 18", sectorCount)
+		t.Errorf("countSectorsIBMPC() = %d, expected 18", sectorCount)
 	}
 }
