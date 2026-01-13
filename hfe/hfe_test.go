@@ -1422,3 +1422,44 @@ func TestCountSectorsIBMPC(t *testing.T) {
 		t.Errorf("countSectorsIBMPC() = %d, expected 18", sectorCount)
 	}
 }
+
+func TestEncodeTrackIBMPC_CountSectors(t *testing.T) {
+	testCases := []struct {
+		name            string
+		sectorsPerTrack int
+	}{
+		{"9 sectors", 9},
+		{"15 sectors", 15},
+		{"18 sectors", 18},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create sectors filled with 0x0f (512 bytes each)
+			sectors := make([][]byte, tc.sectorsPerTrack)
+			for i := 0; i < tc.sectorsPerTrack; i++ {
+				sectorData := make([]byte, 512)
+				for j := range sectorData {
+					sectorData[j] = 0x0f
+				}
+				sectors[i] = sectorData
+			}
+
+			// Encode track using encodeTrackIBMPC (cylinder 0, head 0)
+			encodedTrack := encodeTrackIBMPC(sectors, 0, 0, tc.sectorsPerTrack)
+
+			// Verify encoded track is not empty
+			if len(encodedTrack) == 0 {
+				t.Fatalf("encodeTrackIBMPC() returned empty track data")
+			}
+
+			// Count sectors using countSectorsIBMPC
+			sectorCount := countSectorsIBMPC(encodedTrack)
+
+			// Assert that the count matches the expected number
+			if sectorCount != tc.sectorsPerTrack {
+				t.Errorf("countSectorsIBMPC() = %d, expected %d", sectorCount, tc.sectorsPerTrack)
+			}
+		})
+	}
+}
