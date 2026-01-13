@@ -268,10 +268,10 @@ const (
 )
 
 // detectFormatFromSize detects floppy format from file size
-// Returns: tracks, sides, sectorsPerTrack
-func detectFormatFromSize(fileSize int64) (tracks, sides, sectorsPerTrack int, err error) {
+// Returns: cylinders, sides, sectorsPerTrack
+func detectFormatFromSize(fileSize int64) (cylinders, sides, sectorsPerTrack int, err error) {
 	// File size must be divisible by sector size
-	if fileSize%sectorSize != 0 {
+	if fileSize % sectorSize != 0 {
 		return 0, 0, 0, fmt.Errorf("file size %d is not divisible by sector size %d", fileSize, sectorSize)
 	}
 
@@ -279,7 +279,7 @@ func detectFormatFromSize(fileSize int64) (tracks, sides, sectorsPerTrack int, e
 
 	// Try common floppy format combinations
 	commonFormats := []struct {
-		tracks          int
+		cylinders       int
 		sides           int
 		sectorsPerTrack int
 		totalSectors    int
@@ -292,31 +292,30 @@ func detectFormatFromSize(fileSize int64) (tracks, sides, sectorsPerTrack int, e
 
 	for _, format := range commonFormats {
 		if totalSectors == format.totalSectors {
-			return format.tracks, format.sides, format.sectorsPerTrack, nil
+			return format.cylinders, format.sides, format.sectorsPerTrack, nil
 		}
 	}
 
 	// If no match, try to factor total sectors
-	// Try common side counts (1 or 2)
-	for sides := 1; sides <= 2; sides++ {
-		if totalSectors%sides != 0 {
+	// Try common side counts (2 or 1)
+	for sides := 2; sides > 0; sides-- {
+		if totalSectors % sides != 0 {
 			continue
 		}
 		sectorsPerSide := totalSectors / sides
 
-		// Try common track counts
-		for tracks := 40; tracks <= 80; tracks++ {
-			if sectorsPerSide%tracks == 0 {
-				sectorsPerTrack := sectorsPerSide / tracks
-				if sectorsPerTrack >= 9 && sectorsPerTrack <= 18 {
-					return tracks, sides, sectorsPerTrack, nil
+		// Try common cylinder counts
+		for cylinders := 80; cylinders >= 40; cylinders -= 40 {
+			if sectorsPerSide % cylinders == 0 {
+				sectorsPerTrack := sectorsPerSide / cylinders
+				if sectorsPerTrack >= 8 && sectorsPerTrack <= 18 {
+					return cylinders, sides, sectorsPerTrack, nil
 				}
 			}
 		}
 	}
 
-	// Default to 1.44MB format if ambiguous
-	return 80, 2, 18, nil
+	return 0, 0, 0, fmt.Errorf("unknown floppy image format %d sectors", totalSectors)
 }
 
 // mfmWriter writes MFM-encoded bits to a buffer
@@ -585,19 +584,13 @@ func ReadIMG(filename string) (*Disk, error) {
 	fileSize := fileInfo.Size()
 
 	// Detect format from file size
-	tracks, sides, sectorsPerTrack, err := detectFormatFromSize(fileSize)
+	cylinders, sides, sectorsPerTrack, err := detectFormatFromSize(fileSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect format: %w", err)
 	}
 
-	// Calculate number of cylinders
-	cylinders := tracks / sides
-	if tracks%sides != 0 {
-		return nil, fmt.Errorf("invalid format: tracks %d not divisible by sides %d", tracks, sides)
-	}
-
 	// Read all sectors
-	totalSectors := tracks * sectorsPerTrack
+	totalSectors := cylinders * sides * sectorsPerTrack
 	sectors := make([][]byte, totalSectors)
 	for i := 0; i < totalSectors; i++ {
 		sectorData := make([]byte, sectorSize)
