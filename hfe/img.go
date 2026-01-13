@@ -270,7 +270,7 @@ const (
 // Returns: cylinders, sides, sectorsPerTrack
 func detectFormatFromSize(fileSize int64) (cylinders, sides, sectorsPerTrack int, err error) {
 	// File size must be divisible by sector size
-	if fileSize % sectorSize != 0 {
+	if fileSize%sectorSize != 0 {
 		return 0, 0, 0, fmt.Errorf("file size %d is not divisible by sector size %d", fileSize, sectorSize)
 	}
 
@@ -298,14 +298,14 @@ func detectFormatFromSize(fileSize int64) (cylinders, sides, sectorsPerTrack int
 	// If no match, try to factor total sectors
 	// Try common side counts (2 or 1)
 	for sides := 2; sides > 0; sides-- {
-		if totalSectors % sides != 0 {
+		if totalSectors%sides != 0 {
 			continue
 		}
 		sectorsPerSide := totalSectors / sides
 
 		// Try common cylinder counts
 		for cylinders := 80; cylinders >= 40; cylinders -= 40 {
-			if sectorsPerSide % cylinders == 0 {
+			if sectorsPerSide%cylinders == 0 {
 				sectorsPerTrack := sectorsPerSide / cylinders
 				if sectorsPerTrack >= 8 && sectorsPerTrack <= 18 {
 					return cylinders, sides, sectorsPerTrack, nil
