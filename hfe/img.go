@@ -5,8 +5,13 @@ import (
 	"os"
 )
 
+const (
+	sectorSize = 512 // sector size in bytes
+	indexGap   = 50  // empty bytes before first sector
+	sectorGap  = 108 // empty bytes between sectors
+)
+
 // CRC16-CCITT lookup table (CRC-CCITT = x^16 + x^12 + x^5 + 1)
-// From ibmpc.c lines 15-38
 var crc16PolyTab = [256]uint16{
 	0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7, 0x8108, 0x9129, 0xa14a, 0xb16b,
 	0xc18c, 0xd1ad, 0xe1ce, 0xf1ef, 0x1231, 0x0210, 0x3273, 0x2252, 0x52b5, 0x4294, 0x72f7, 0x62d6,
@@ -32,8 +37,7 @@ var crc16PolyTab = [256]uint16{
 	0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
 }
 
-// crc16CCITT calculates CRC16-CCITT over data
-// From ibmpc.c lines 45-51
+// Calculate CRC16-CCITT over data
 func crc16CCITT(sum uint16, data []byte) uint16 {
 	for _, b := range data {
 		sum = (sum << 8) ^ crc16PolyTab[byte(b)^byte(sum>>8)]
@@ -41,13 +45,12 @@ func crc16CCITT(sum uint16, data []byte) uint16 {
 	return sum
 }
 
-// crc16CCITTByte calculates CRC16-CCITT for a single byte
-// From ibmpc.c lines 53-57
+// Calculate CRC16-CCITT for a single byte
 func crc16CCITTByte(sum uint16, b byte) uint16 {
 	return (sum << 8) ^ crc16PolyTab[b^byte(sum>>8)]
 }
 
-// mfmReader reads bits from an MFM bitstream (MSB-first byte order)
+// Read bits from an MFM bitstream (MSB-first byte order)
 // The HFE format stores the raw MFM-encoded bitstream where clock and data bits are interleaved.
 // In MFM encoding: each data bit is encoded as 2 bits (clock bit, data bit).
 // The stream is: C0, D0, C1, D1, C2, D2, ... where C=clock, D=data
@@ -57,7 +60,7 @@ type mfmReader struct {
 	bitPos int    // Current bit position in raw bitstream (0-based)
 }
 
-// newMFMReader creates a new MFM bitstream reader
+// Create a new MFM bitstream reader
 func newMFMReader(data []byte) *mfmReader {
 	return &mfmReader{
 		data:   data,
@@ -94,7 +97,7 @@ func (r *mfmReader) readBit() (int, error) {
 	return bit, nil
 }
 
-// readByte reads 8 bits and returns them as a byte
+// Read 8 bits and return them as a byte
 func (r *mfmReader) readByte() (byte, error) {
 	var result byte
 	for i := 0; i < 8; i++ {
@@ -107,9 +110,8 @@ func (r *mfmReader) readByte() (byte, error) {
 	return result, nil
 }
 
-// scanIBMPC scans for IBM PC sector markers
-// From ibmpc.c lines 80-118
-// Returns the tag byte after the marker, or error
+// Scan for IBM PC sector markers
+// Return the tag byte after the marker, or error
 func (r *mfmReader) scanIBMPC() (int, error) {
 	history := uint32(0x13713713)
 
@@ -143,9 +145,8 @@ func (r *mfmReader) scanIBMPC() (int, error) {
 	}
 }
 
-// readSectorIBMPC reads a sector from IBM PC format
-// From ibmpc.c lines 123-202
-// Returns: sector number (0-based), 512-byte data, error
+// Read a sector from IBM PC format
+// Return: sector number (0-based), 512-byte data, error
 func (r *mfmReader) readSectorIBMPC(cylinder, head int) (int, []byte, error) {
 	const sectorSize = 512
 	data := make([]byte, sectorSize)
@@ -258,18 +259,8 @@ func (r *mfmReader) readSectorIBMPC(cylinder, head int) (int, []byte, error) {
 	}
 }
 
-// Constants for IBM PC floppy format
-const (
-	sectorSize  = 512
-	indexGap    = 42   // bytes before first sector
-	dataGap     = 22   // bytes between sector mark and data
-	sectorGap9  = 80   // bytes for 9 sectors per track
-	sectorGap10 = 46   // bytes for 10+ sectors per track
-	gapByte     = 0x4E // standard gap byte
-)
-
-// detectFormatFromSize detects floppy format from file size
-// Returns: cylinders, sides, sectorsPerTrack
+// Detect floppy format from file size
+// Return: cylinders, sides, sectorsPerTrack
 func detectFormatFromSize(fileSize int64) (cylinders, sides, sectorsPerTrack int, err error) {
 	// File size must be divisible by sector size
 	if fileSize%sectorSize != 0 {
@@ -319,7 +310,7 @@ func detectFormatFromSize(fileSize int64) (cylinders, sides, sectorsPerTrack int
 	return 0, 0, 0, fmt.Errorf("unknown floppy image format %d sectors", totalSectors)
 }
 
-// mfmWriter writes MFM-encoded bits to a buffer
+// Write MFM-encoded bits to a buffer
 type mfmWriter struct {
 	buffer      []byte // Output buffer
 	bitPos      int    // Current bit position (0-based)
@@ -373,7 +364,7 @@ func (w *mfmWriter) writeBit(dataBit int) {
 	w.lastDataBit = dataBit
 }
 
-// writeByte writes a data byte, encoding it as MFM (16 bits = 2 bytes)
+// Write a data byte, encoding it as MFM (16 bits = 2 bytes)
 func (w *mfmWriter) writeByte(data byte) {
 	// Encode each bit of the data byte
 	for i := 7; i >= 0; i-- {
@@ -382,15 +373,14 @@ func (w *mfmWriter) writeByte(data byte) {
 	}
 }
 
-// writeGap writes n bytes of gap (repeated gapByte)
+// Write n bytes of gap
 func (w *mfmWriter) writeGap(n int) {
 	for i := 0; i < n; i++ {
-		w.writeByte(gapByte)
+		w.writeByte(0x4E) // standard gap byte
 	}
 }
 
-// writeMarker writes the A1 sync marker (12 bytes of 0x00 + 3 bytes of A1 with MFM violation)
-// From ibmpc.c write_marker()
+// Write the A1 sync marker (12 bytes of 0x00 + 3 bytes of A1 with MFM violation)
 // A1 = 0xA1 = 10100001, but with MFM violations in bits 2 and 1 (half-bits)
 func (w *mfmWriter) writeMarker() {
 	// Twelve bytes of zeros (normal MFM encoding)
@@ -414,8 +404,7 @@ func (w *mfmWriter) writeMarker() {
 	}
 }
 
-// writeIndexMarker writes the index marker (C2 sync)
-// From ibmpc.c write_index_marker()
+// Write the index marker (C2 sync)
 // C2 = 0xC2 = 11000010, but with MFM violations in bits 2 and 1 (half-bits)
 func (w *mfmWriter) writeIndexMarker() {
 	// Twelve bytes of zeros (normal MFM encoding)
@@ -437,16 +426,10 @@ func (w *mfmWriter) writeIndexMarker() {
 		w.writeBit(1)     // data bit 0
 		w.writeBit(0)     // This completes the C2 pattern (11000010)
 	}
+	w.writeByte(0xFC)
 }
 
-// fillTrack fills remaining track space with gap bytes
-func (w *mfmWriter) fillTrack() {
-	// Fill to a reasonable track size (approximately 6250 bytes for 1.44MB at 500 kbps)
-	// For now, we'll let the caller determine the exact size needed
-	// This is a placeholder - actual implementation may need track size calculation
-}
-
-// getData returns the MFM-encoded buffer
+// Return the MFM-encoded buffer
 func (w *mfmWriter) getData() []byte {
 	// Trim to actual size used
 	actualBytes := (w.bitPos + 7) / 8
@@ -456,7 +439,7 @@ func (w *mfmWriter) getData() []byte {
 	return w.buffer
 }
 
-// encodeTrackIBMPC encodes a track in IBM PC format
+// Encode a track in IBM PC format
 // sectors: array of sector data (512 bytes each), indexed by sector number
 // cylinder: cylinder number (0-based)
 // head: head number (0 or 1)
@@ -464,21 +447,13 @@ func (w *mfmWriter) getData() []byte {
 func encodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int, maxHalfBits int) []byte {
 	writer := newMFMWriter(maxHalfBits)
 
-	// Determine sector gap based on sectors per track
-	sectorGap := sectorGap10
-	if sectorsPerTrack == 9 {
-		sectorGap = sectorGap9
-	}
-
-	// Index gap (before first sector)
+	// Index (before first sector)
+	writer.writeGap(80)
+	writer.writeIndexMarker()
 	writer.writeGap(indexGap)
 
 	// Write each sector
 	for s := 0; s < sectorsPerTrack; s++ {
-		if s > 0 {
-			writer.writeGap(sectorGap)
-		}
-
 		// Sector marker (A1 sync)
 		writer.writeMarker()
 
@@ -501,8 +476,8 @@ func encodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int, max
 		writer.writeByte(byte(sum >> 8))
 		writer.writeByte(byte(sum))
 
-		// Data gap
-		writer.writeGap(dataGap)
+		// Gap between sector mark and data
+		writer.writeGap(22)
 
 		// Data marker (A1 sync)
 		writer.writeMarker()
@@ -527,17 +502,15 @@ func encodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int, max
 		// Write data CRC
 		writer.writeByte(byte(sum >> 8))
 		writer.writeByte(byte(sum))
+
+		writer.writeGap(sectorGap)
 	}
 
-	// Fill remaining track (approximate - actual size depends on bit rate)
-	// For 1.44MB at 500 kbps, track is approximately 6250 bytes
-	// We'll fill to a reasonable size
-	trackSize := 6250 // Approximate track size in bytes
-	currentSize := len(writer.getData())
-	if currentSize < trackSize {
-		writer.writeGap(trackSize - currentSize)
+	// Fill remaining track
+	fillGap := maxHalfBits/8 - len(writer.getData())
+	if fillGap > 0 {
+		writer.writeGap(fillGap)
 	}
-
 	return writer.getData()
 }
 
