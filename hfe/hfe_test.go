@@ -3,6 +3,7 @@ package hfe
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/sergev/floppy/mfm"
 	"io"
 	"os"
 	"path/filepath"
@@ -1387,5 +1388,39 @@ func TestWriteV1NoOpcodes(t *testing.T) {
 		if trackBuf[i] == NOP_OPCODE {
 			t.Errorf("WriteHFE() v1 track data at offset %d contains NOP opcode (0xF0), expected 0xFF padding", i)
 		}
+	}
+}
+
+func TestCountSectorsIBMPC(t *testing.T) {
+	// Find the test file
+	sampleFile := findSampleFile(t, "fat12v1.hfe")
+	if sampleFile == "" {
+		return // Test was skipped
+	}
+
+	// Load the HFE file
+	disk, err := ReadHFE(sampleFile)
+	if err != nil {
+		t.Fatalf("ReadHFE() error: %v", err)
+	}
+
+	// Verify we have at least one track
+	if len(disk.Tracks) == 0 {
+		t.Fatalf("ReadHFE() returned disk with no tracks")
+	}
+
+	// Extract side #0 data from track #0
+	side0Data := disk.Tracks[0].Side0
+	if len(side0Data) == 0 {
+		t.Fatalf("Track 0 side 0 data is empty")
+	}
+
+	// Call countSectorsIBMPC() with the side 0 data from HFE file
+	reader := mfm.NewReader(side0Data)
+	sectorCount := reader.CountSectorsIBMPC()
+
+	// Assert the result equals 18
+	if sectorCount != 18 {
+		t.Errorf("countSectorsIBMPC() = %d, expected 18", sectorCount)
 	}
 }

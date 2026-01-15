@@ -1,4 +1,4 @@
-package hfe
+package mfm
 
 import (
 	"testing"
@@ -47,7 +47,7 @@ func TestMfmWriterReaderRoundTrip(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Step 1: Write bytes with mfmWriter
-			writer := newMFMWriter(200000)
+			writer := NewWriter(200000)
 			for _, b := range tc.inputBytes {
 				writer.writeByte(b)
 			}
@@ -82,7 +82,7 @@ func TestMfmWriterReaderRoundTrip(t *testing.T) {
 			}
 
 			// Step 5: Initialize mfmReader with the output
-			reader := newMFMReader(mfmOutput)
+			reader := NewReader(mfmOutput)
 
 			// Step 6: Read bytes back
 			readBytes := make([]byte, 0, len(tc.inputBytes))
@@ -113,7 +113,7 @@ func TestMfmWriterReaderRoundTrip(t *testing.T) {
 			// If not matched, try reading with a phase offset (skip one bit)
 			if !matched {
 				// Try reading with a phase offset by advancing a half-bit
-				reader2 := newMFMReader(mfmOutput)
+				reader2 := NewReader(mfmOutput)
 				// advance one half-bit to shift phase
 				if _, err := reader2.readHalfBit(); err != nil {
 					t.Fatalf("Failed to advance phase: %v", err)
@@ -165,39 +165,6 @@ func TestMfmWriterReaderRoundTrip(t *testing.T) {
 	}
 }
 
-func TestCountSectorsIBMPC(t *testing.T) {
-	// Find the test file
-	sampleFile := findSampleFile(t, "fat12v1.hfe")
-	if sampleFile == "" {
-		return // Test was skipped
-	}
-
-	// Load the HFE file
-	disk, err := ReadHFE(sampleFile)
-	if err != nil {
-		t.Fatalf("ReadHFE() error: %v", err)
-	}
-
-	// Verify we have at least one track
-	if len(disk.Tracks) == 0 {
-		t.Fatalf("ReadHFE() returned disk with no tracks")
-	}
-
-	// Extract side #0 data from track #0
-	side0Data := disk.Tracks[0].Side0
-	if len(side0Data) == 0 {
-		t.Fatalf("Track 0 side 0 data is empty")
-	}
-
-	// Call countSectorsIBMPC() with the side 0 data from HFE file
-	sectorCount := countSectorsIBMPC(side0Data)
-
-	// Assert the result equals 18
-	if sectorCount != 18 {
-		t.Errorf("countSectorsIBMPC() = %d, expected 18", sectorCount)
-	}
-}
-
 func TestEncodeTrackIBMPC_CountSectors(t *testing.T) {
 	testCases := []struct {
 		name            string
@@ -221,7 +188,8 @@ func TestEncodeTrackIBMPC_CountSectors(t *testing.T) {
 			}
 
 			// Encode track using encodeTrackIBMPC (cylinder 0, head 0)
-			encodedTrack := encodeTrackIBMPC(sectors, 0, 0, tc.sectorsPerTrack, 200000)
+			writer := NewWriter(200000)
+			encodedTrack := writer.EncodeTrackIBMPC(sectors, 0, 0, tc.sectorsPerTrack)
 
 			// Verify encoded track is not empty
 			if len(encodedTrack) == 0 {
@@ -229,7 +197,8 @@ func TestEncodeTrackIBMPC_CountSectors(t *testing.T) {
 			}
 
 			// Count sectors using countSectorsIBMPC
-			sectorCount := countSectorsIBMPC(encodedTrack)
+			reader := NewReader(encodedTrack)
+			sectorCount := reader.CountSectorsIBMPC()
 
 			// Assert that the count matches the expected number
 			if sectorCount != tc.sectorsPerTrack {
