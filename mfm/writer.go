@@ -1,5 +1,7 @@
 package mfm
 
+import "fmt"
+
 // Write MFM-encoded bits to a buffer
 type Writer struct {
 	buffer      []byte // Output buffer
@@ -265,4 +267,125 @@ func computeGapsIBMPC(bitRate uint16, sectorsPerTrack int) (int, int) {
 		}
 	}
 	return headerGap, sectorGap
+}
+
+// shuffle splits a 32-bit word into odd and even bit streams.
+func shuffle(word uint32) (odd, even uint16) {
+	for i := 0; i < 16; i++ {
+		odd <<= 1
+		even <<= 1
+		odd |= uint16((word >> 31) & 1)
+		even |= uint16((word >> 30) & 1)
+		word <<= 2
+	}
+	return odd, even
+}
+
+// writeMarkerAmiga writes the Amiga sector marker (00-a1-a1-fx pattern).
+func (w *Writer) writeMarkerAmiga() {
+	// Two bytes of zeros
+	w.writeByte(0)
+	w.writeByte(0)
+
+	// Two bytes of A1 violating encoding in the sixth bit
+	// Pattern: 1, 0, 1, 0, 0, [half-bit], [half-bit], 0, 1
+	for i := 0; i < 2; i++ {
+		w.writeBit(1)     // data bit 7
+		w.writeBit(0)     // data bit 6
+		w.writeBit(1)     // data bit 5
+		w.writeBit(0)     // data bit 4
+		w.writeBit(0)     // data bit 3
+		w.writeHalfBit(0) // data bit 2 (half-bit violation)
+		w.writeHalfBit(0) // data bit 1 (half-bit violation)
+		w.writeBit(0)     // data bit 0
+		w.writeBit(1)     // This completes the A1 pattern (10100001)
+	}
+}
+
+// writeIdentAmiga writes the sector identifier and its checksum.
+func (w *Writer) writeIdentAmiga(track, sector int) {
+	// Compute identifier: 0xff << 24 | track << 16 | sector << 8 | (11 - sector)
+	ldata := uint32(0xff)<<24 | uint32(track)<<16 | uint32(sector)<<8 | uint32(11-sector)
+
+	// Shuffle and compute checksum
+	odd, even := shuffle(ldata)
+	sum := uint32(odd) ^ uint32(even)
+
+	// Write identifier (shuffled)
+	w.writeByte(byte(odd >> 8))
+	w.writeByte(byte(odd))
+	w.writeByte(byte(even >> 8))
+	w.writeByte(byte(even))
+
+	// Write label (4 longs, all zeros)
+	for i := 0; i < 16; i++ {
+		w.writeByte(0)
+	}
+
+	// Write checksum
+	w.writeByte(byte(sum >> 24))
+	w.writeByte(byte(sum >> 16))
+	w.writeByte(byte(sum >> 8))
+	w.writeByte(byte(sum))
+}
+
+// writeSectorAmiga writes a 512-byte block with bit shuffling.
+// Before the block, 4 bytes of checksum are written.
+func (w *Writer) writeSectorAmiga(data []byte) {
+	if len(data) != sectorSize {
+		panic(fmt.Sprintf("data buffer must be %d bytes", sectorSize))
+	}
+
+	// Shuffle data and compute checksum
+	odd := make([]uint16, sectorSize/4)
+	even := make([]uint16, sectorSize/4)
+	var sum uint32
+
+	for i := 0; i < sectorSize/4; i++ {
+		ldata := uint32(data[4*i])<<24 | uint32(data[4*i+1])<<16 | uint32(data[4*i+2])<<8 | uint32(data[4*i+3])
+		odd[i], even[i] = shuffle(ldata)
+		sum ^= uint32(odd[i]) ^ uint32(even[i])
+	}
+
+	// Write checksum
+	w.writeByte(byte(sum >> 24))
+	w.writeByte(byte(sum >> 16))
+	w.writeByte(byte(sum >> 8))
+	w.writeByte(byte(sum))
+
+	// Write data, odd bits first
+	for i := 0; i < sectorSize/4; i++ {
+		w.writeByte(byte(odd[i] >> 8))
+		w.writeByte(byte(odd[i]))
+	}
+	// Then even bits
+	for i := 0; i < sectorSize/4; i++ {
+		w.writeByte(byte(even[i] >> 8))
+		w.writeByte(byte(even[i]))
+	}
+}
+
+// EncodeTrackAmiga encodes a track in Amiga format.
+// sectors: array of sector data (512 bytes each), indexed by sector number (0-10)
+// track: track number (0-based, where track = cylinder*2 + head)
+func (w *Writer) EncodeTrackAmiga(sectors [][]byte, track int) []byte {
+	const gapSize = 150 // Gap before first sector
+
+	// Write gap
+	w.writeGap(gapSize)
+
+	// Write each sector
+	for s := 0; s < 11; s++ {
+		w.writeMarkerAmiga()
+		w.writeIdentAmiga(track, s)
+		w.writeSectorAmiga(sectors[s])
+	}
+
+	// Fill remaining track
+	fillGap := w.maxHalfBits/8 - len(w.getData())
+	if fillGap > 0 {
+		w.writeGap(fillGap)
+	}
+
+	return w.getData()
 }
