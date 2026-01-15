@@ -7,8 +7,6 @@ import (
 
 const (
 	sectorSize = 512 // sector size in bytes
-	indexGap   = 50  // empty bytes before first sector
-	sectorGap  = 108 // empty bytes between sectors
 )
 
 // CRC16-CCITT lookup table (CRC-CCITT = x^16 + x^12 + x^5 + 1)
@@ -148,7 +146,6 @@ func (r *mfmReader) scanIBMPC() (int, error) {
 // Read a sector from IBM PC format
 // Return: sector number (0-based), 512-byte data, error
 func (r *mfmReader) readSectorIBMPC(cylinder, head int) (int, []byte, error) {
-	const sectorSize = 512
 	data := make([]byte, sectorSize)
 
 	for {
@@ -447,6 +444,11 @@ func (w *mfmWriter) getData() []byte {
 func encodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int, maxHalfBits int) []byte {
 	writer := newMFMWriter(maxHalfBits)
 
+	//TODO: compute gaps based on bit rate and sectorsPerTrack.
+	indexGap  := 50  // empty bytes before first sector
+	headerGap := 22  // empty bytes after sector header before sector data
+	sectorGap := 108 // empty bytes between sectors
+
 	// Index (before first sector)
 	writer.writeGap(80)
 	writer.writeIndexMarker()
@@ -477,7 +479,7 @@ func encodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int, max
 		writer.writeByte(byte(sum))
 
 		// Gap between sector mark and data
-		writer.writeGap(22)
+		writer.writeGap(headerGap)
 
 		// Data marker (A1 sync)
 		writer.writeMarker()
@@ -503,6 +505,7 @@ func encodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int, max
 		writer.writeByte(byte(sum >> 8))
 		writer.writeByte(byte(sum))
 
+		// Gap between sectors
 		writer.writeGap(sectorGap)
 	}
 
@@ -699,7 +702,6 @@ func WriteIMG(filename string, disk *Disk) error {
 	defer file.Close()
 
 	// Figure out disk geometry
-	const sectorSize = 512
 	numCylinders := int(disk.Header.NumberOfTrack)
 	if numCylinders > 80 {
 		// Ignore extra cylinders
