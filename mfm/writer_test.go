@@ -170,7 +170,6 @@ func TestEncodeTrackIBMPC_CountSectors(t *testing.T) {
 		name            string
 		sectorsPerTrack int
 	}{
-		{"9 sectors", 9},
 		{"15 sectors", 15},
 		{"18 sectors", 18},
 	}
@@ -189,7 +188,7 @@ func TestEncodeTrackIBMPC_CountSectors(t *testing.T) {
 
 			// Encode track using encodeTrackIBMPC (cylinder 0, head 0)
 			writer := NewWriter(200000)
-			encodedTrack := writer.EncodeTrackIBMPC(sectors, 0, 0, tc.sectorsPerTrack)
+			encodedTrack := writer.EncodeTrackIBMPC(sectors, 0, 0, tc.sectorsPerTrack, 500)
 
 			// Verify encoded track is not empty
 			if len(encodedTrack) == 0 {

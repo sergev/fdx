@@ -148,7 +148,7 @@ func ReadIMG(filename string) (*Disk, error) {
 
 			// Encode track to MFM
 			writer := mfm.NewWriter(maxHalfBits)
-			mfmData := writer.EncodeTrackIBMPC(trackSectors, cyl, head, sectorsPerTrack)
+			mfmData := writer.EncodeTrackIBMPC(trackSectors, cyl, head, sectorsPerTrack, disk.Header.BitRate)
 
 			// Store in appropriate side
 			if head == 0 {

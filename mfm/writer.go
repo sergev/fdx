@@ -72,7 +72,7 @@ func (w *Writer) writeGap(n int) {
 
 // Write the A1 sync marker (12 bytes of 0x00 + 3 bytes of A1 with MFM violation)
 // A1 = 0xA1 = 10100001, but with MFM violations in bits 2 and 1 (half-bits)
-func (w *Writer) writeMarker() {
+func (w *Writer) writeMarker(tag uint8) {
 	// Twelve bytes of zeros (normal MFM encoding)
 	for i := 0; i < 12; i++ {
 		w.writeByte(0)
@@ -92,6 +92,7 @@ func (w *Writer) writeMarker() {
 		w.writeBit(0)     // data bit 0
 		w.writeBit(1)     // This completes the A1 pattern (10100001)
 	}
+	w.writeByte(tag)
 }
 
 // Write the index marker (C2 sync)
@@ -134,25 +135,31 @@ func (w *Writer) getData() []byte {
 // cylinder: cylinder number (0-based)
 // head: head number (0 or 1)
 // sectorsPerTrack: number of sectors per track
-func (w *Writer) EncodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int) []byte {
+//
+// Track layout for IBM PC floppies
+// ┌─────┬──────┬────┬···┬──────┬──────┬────┬──────┬────┬────┬···┬─────┐
+// │gap4a│Index │gap1│   │Sector│Sector│gap2│Data  │Data│gap3│   │gap4b│
+// │(80) │Marker│(50)│   │Marker│Header│(22)│Marker│+CRC│    │   │     │
+// └─────┴──────┴────┴···┴──────┴──────┴────┴──────┴────┴────┴···┴─────┘
+//                     └───────────────repeat──────────────────┘
+func (w *Writer) EncodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int, bitRate uint16) []byte {
 
-	//TODO: compute gaps based on bit rate and sectorsPerTrack.
-	indexGap := 50   // empty bytes before first sector
-	headerGap := 22  // empty bytes after sector header before sector data
-	sectorGap := 108 // empty bytes between sectors
+	const startGap = 80 // gap4a: empty bytes before index marker
+	const indexGap = 50 // gap1: empty bytes before first sector
+
+	// Compute gap2 and gap3 based on bit rate and sectorsPerTrack.
+	headerGap, sectorGap := computeGapsIBMPC(bitRate, sectorsPerTrack)
 
 	// Index (before first sector)
-	w.writeGap(80)
+	w.writeGap(startGap)
 	w.writeIndexMarker()
 	w.writeGap(indexGap)
 
 	// Write each sector
 	for s := 0; s < sectorsPerTrack; s++ {
-		// Sector marker (A1 sync)
-		w.writeMarker()
 
-		// Sector header tag
-		w.writeByte(0xFE)
+		// Sector marker
+		w.writeMarker(0xFE)
 
 		// Sector identifier: cylinder, head, sector, size
 		w.writeByte(byte(cylinder))
@@ -173,18 +180,13 @@ func (w *Writer) EncodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTr
 		// Gap between sector mark and data
 		w.writeGap(headerGap)
 
-		// Data marker (A1 sync)
-		w.writeMarker()
+		// Data marker
+		w.writeMarker(0xFB)
 
-		// Data tag
-		w.writeByte(0xFB)
-
-		// Sector data should be present
+		// Sector data must be present
 		sectorData := sectors[s]
-		if sectorData != nil {
-			for _, b := range sectorData {
-				w.writeByte(b)
-			}
+		for _, b := range sectorData {
+			w.writeByte(b)
 		}
 
 		// Calculate data CRC
@@ -205,4 +207,62 @@ func (w *Writer) EncodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTr
 		w.writeGap(fillGap)
 	}
 	return w.getData()
+}
+
+// Compute gap2 and gap3 based on bit rate and number of sectors per track.
+//
+//             Floppy  Media   Sectors
+// Bit rate    Drive   Volume  per track  Heads  Tracks  gap2  gap3
+// ----------------------------------------------------------------
+// 500 kbps    5¼"AT   1.2M    15         2      80      22    84
+//             3½"     1.44M   18         2      80      22    108
+//             3½"     1.6M    20         2      80      22    44
+// ----------------------------------------------------------------
+// 250 kbps    5¼"SS   160K    8          1      40      22    80
+//             5¼"SS   180K    9          1      40      22    80
+//             5¼"PC   320K    8          2      40      22    80
+//             5¼"PC   360K    9          2      40      22    80
+//             3½"SS   360K    9          1      80      22    80
+//             3½"     720K    9          2      80      22    80
+//             3½"     800K    10         2      80      22    46
+// ----------------------------------------------------------------
+// 300 kbps    5¼"AT   360K    9          2      40      22    80
+//             5¼"AT   720K    9          2      80      22    80
+//             5¼"AT   800K    10         2      80      22    46
+// ----------------------------------------------------------------
+// 1000 kbps   3½"     2.88M   36         2      80      41    84
+//             3½"     3.12M   39         2      80      41    40
+//
+func computeGapsIBMPC(bitRate uint16, sectorsPerTrack int) (int, int) {
+
+	// gap2: empty bytes after sector header before sector data
+	headerGap := 22
+	if bitRate > 500 {
+		// 2.88M floppies need more time for magnetic head to switch
+		headerGap = 41
+	}
+
+	// gap3: empty bytes between sectors
+	sectorGap := 80
+	switch bitRate {
+	case 500:
+		sectorGap = 108
+		if sectorsPerTrack < 18 {
+			sectorGap = 84
+		}
+		if sectorsPerTrack > 18 {
+			sectorGap = 44
+		}
+	case 1000:
+		sectorGap = 84
+		if sectorsPerTrack > 36 {
+			sectorGap = 40
+		}
+	case 250, 300:
+		sectorGap = 80
+		if sectorsPerTrack > 9 {
+			sectorGap = 46
+		}
+	}
+	return headerGap, sectorGap
 }
