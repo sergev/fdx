@@ -13,9 +13,10 @@ var writeCmd = &cobra.Command{
 	Long: `Write image from SRC.EXT to the floppy disk.
 Format of floppy image is defined by extension.
 Supported image formats:
+	adf        - Amiga Disk File
     hde        - HxC Floppy Emulator
     img or ima - raw binary contents of the entire disk`,
-	// TODO: adf        - Amiga Disk File
+	// TODO: bkd        - BK-0010/0011M Disk image
 	// TODO: cp2        - Central Point Software's Copy-II-PC
 	// TODO: dcf        - Disk Copy Fast utility
 	// TODO: epl        - EPLCopy utility
