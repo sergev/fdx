@@ -31,7 +31,7 @@ Note: The Golang compiler must be present on your system for this installation m
 
 ## Status
 
-- Currently, supported file formats are [HFE](docs/HFE_File_Format.md), [IMG](https://en.wikipedia.org/wiki/IMG_(file_format)) and [ADF](https://en.wikipedia.org/wiki/Amiga_Disk_File). ADF format was not tested well yet, and is considered experimental.
+- Currently, supported file formats are [HFE](docs/HFE_File_Format.md), [IMG](https://en.wikipedia.org/wiki/IMG_(file_format)) and [ADF](https://en.wikipedia.org/wiki/Amiga_Disk_File).
 - Other file formats are planned for future releases.
 - The `format` operation is not yet available. It will create filesystems of well-known types.
 - For KryoFlux adapters, writing to floppies is not supported.

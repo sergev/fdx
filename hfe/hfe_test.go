@@ -1424,3 +1424,37 @@ func TestCountSectorsIBMPC(t *testing.T) {
 		t.Errorf("countSectorsIBMPC() = %d, expected 18", sectorCount)
 	}
 }
+
+func TestCountSectorsAmiga(t *testing.T) {
+	// Find the test file
+	sampleFile := findSampleFile(t, "blank.adf")
+	if sampleFile == "" {
+		return // Test was skipped
+	}
+
+	// Load the ADF file
+	disk, err := ReadADF(sampleFile)
+	if err != nil {
+		t.Fatalf("ReadADF() error: %v", err)
+	}
+
+	// Verify we have at least one track
+	if len(disk.Tracks) == 0 {
+		t.Fatalf("ReadADF() returned disk with no tracks")
+	}
+
+	// Extract side #0 data from track #0
+	side0Data := disk.Tracks[0].Side0
+	if len(side0Data) == 0 {
+		t.Fatalf("Track 0 side 0 data is empty")
+	}
+
+	// Call countSectorsAmiga() with the side 0 data from ADF file
+	reader := mfm.NewReader(side0Data)
+	sectorCount := reader.CountSectorsAmiga(0)
+
+	// Assert the result equals 11
+	if sectorCount != 11 {
+		t.Errorf("countSectorsAmiga() = %d, expected 11", sectorCount)
+	}
+}
