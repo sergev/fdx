@@ -286,7 +286,7 @@ func (c *Client) Read(numberOfTracks int) (*hfe.Disk, error) {
 			disk.Tracks[cyl].Side1 = mfmBitstream
 		}
 	}
-	fmt.Printf(" Done\n")
+	fmt.Printf("\nRead complete.\n")
 
 	return disk, nil
 }

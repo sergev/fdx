@@ -74,7 +74,7 @@ func (c *Client) Erase(numberOfTracks int) error {
 			return fmt.Errorf("failed to erase track %d: %w", track, err)
 		}
 	}
-	fmt.Printf(" Done\n")
+	fmt.Printf("\nErase complete.\n")
 
 	return nil
 }

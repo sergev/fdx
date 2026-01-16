@@ -404,8 +404,8 @@ func (c *Client) Read(numberOfTracks int) (*hfe.Disk, error) {
 				} else {
 					calculatedBitRate = 1000
 				}
-				fmt.Printf("Rotation Speed: %d RPM\n", calculatedRPM)
 				fmt.Printf("Bit Rate: %d kbps\n", calculatedBitRate)
+				fmt.Printf("Rotation Speed: %d RPM\n", calculatedRPM)
 
 				disk.Header.FloppyRPM = calculatedRPM
 				disk.Header.BitRate = calculatedBitRate
@@ -438,7 +438,7 @@ func (c *Client) Read(numberOfTracks int) (*hfe.Disk, error) {
 			}
 		}
 	}
-	fmt.Printf(" Done\n")
+	fmt.Printf("\nRead complete.\n")
 
 	return disk, nil
 }

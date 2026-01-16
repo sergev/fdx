@@ -1,7 +1,9 @@
 package adapter
 
 import (
+	"bufio"
 	"fmt"
+	"os"
 
 	"github.com/sergev/floppy/hfe"
 	"github.com/spf13/cobra"
@@ -48,18 +50,24 @@ Supported image formats:
 		if numberOfTracks > 82 {
 			numberOfTracks = 82
 		}
+		fmt.Printf("Writing %d tracks, %d side(s)\n", numberOfTracks, disk.Header.NumberOfSide)
+		fmt.Printf("Bit Rate: %d kbps\n", disk.Header.BitRate)
+		fmt.Printf("Rotation Speed: %d RPM\n", disk.Header.FloppyRPM)
+		fmt.Printf("\n")
 
-		fmt.Printf("Writing file to floppy disk\n")
-		fmt.Printf("Tracks: %d, Sides: %d, Bit Rate: %d kbps, RPM: %d\n",
-			numberOfTracks, disk.Header.NumberOfSide, disk.Header.BitRate, disk.Header.FloppyRPM)
+		// Prompt user to insert diskette
+		fmt.Print("Insert TARGET diskette in drive\nand press Enter when ready...")
+		reader := bufio.NewReader(os.Stdin)
+		_, _ = reader.ReadString('\n')
+		fmt.Printf("\n")
 
 		// Write floppy disk using adapter interface
 		err = floppyAdapter.Write(disk, numberOfTracks)
 		if err != nil {
 			cobra.CheckErr(fmt.Errorf("failed to write floppy disk: %w", err))
 		}
-
-		fmt.Printf("Successfully imaged floppy disk from %s\n", filename)
+		fmt.Printf("\n")
+		fmt.Printf("Image from file '%s' written to diskette.\n", filename)
 	},
 }
 

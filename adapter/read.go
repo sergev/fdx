@@ -1,7 +1,9 @@
 package adapter
 
 import (
+	"bufio"
 	"fmt"
+	"os"
 
 	"github.com/sergev/floppy/hfe"
 	"github.com/spf13/cobra"
@@ -31,6 +33,9 @@ Supported image formats:
 
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		if floppyAdapter == nil {
+			cobra.CheckErr(fmt.Errorf("adapter not available"))
+		}
 
 		// Determine output filename
 		filename := "image.hfe"
@@ -41,10 +46,13 @@ Supported image formats:
 			cobra.CheckErr(fmt.Errorf("unknown image format: %s", filename))
 		}
 
+		// Prompt user to insert diskette
+		fmt.Print("Insert SOURCE diskette in drive\nand press Enter when ready...")
+		reader := bufio.NewReader(os.Stdin)
+		_, _ = reader.ReadString('\n')
+		fmt.Printf("\n")
+
 		// Read floppy disk using adapter interface
-		if floppyAdapter == nil {
-			cobra.CheckErr(fmt.Errorf("adapter not available"))
-		}
 		disk, err := floppyAdapter.Read(82)
 		if err != nil {
 			cobra.CheckErr(fmt.Errorf("failed to read floppy disk: %w", err))
@@ -55,8 +63,8 @@ Supported image formats:
 		if err != nil {
 			cobra.CheckErr(fmt.Errorf("failed to write file: %w", err))
 		}
-
-		fmt.Printf("Successfully read floppy image to file %s\n", filename)
+		fmt.Printf("\n")
+		fmt.Printf("Image from diskette saved to file '%s'.\n", filename)
 	},
 }
 

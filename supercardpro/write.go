@@ -107,7 +107,7 @@ func (c *Client) Write(disk *hfe.Disk, numberOfTracks int) error {
 			}
 		}
 	}
-	fmt.Printf(" Done\n")
+	fmt.Printf("\nWrite complete.\n")
 
 	return nil
 }

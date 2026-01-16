@@ -587,7 +587,7 @@ func (c *Client) Read(numberOfTracks int) (*hfe.Disk, error) {
 			}
 		}
 	}
-	fmt.Printf(" Done\n")
+	fmt.Printf("\nRead complete.\n")
 
 	// Turn off motor
 	err = c.motorOff()

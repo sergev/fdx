@@ -82,7 +82,7 @@ func (c *Client) Erase(numberOfTracks int) error {
 			}
 		}
 	}
-	fmt.Printf(" Done\n")
+	fmt.Printf("\nErase complete.\n")
 
 	return nil
 }
