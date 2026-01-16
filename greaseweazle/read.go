@@ -174,7 +174,11 @@ func (c *Client) calculateRPMAndBitRate(fluxData []byte) (uint16, uint16) {
 	// Round to standard floppy drive bitrates: 250, 500, or 1000 kbps
 	// Use thresholds: < 375 -> 250, < 750 -> 500, >= 750 -> 1000
 	if bitsPerMsec < 375 {
-		bitsPerMsec = 250
+		if rpm == 360 {
+			bitsPerMsec = 300
+		} else {
+			bitsPerMsec = 250
+		}
 	} else if bitsPerMsec < 750 {
 		bitsPerMsec = 500
 	} else {
@@ -398,7 +402,11 @@ func (c *Client) Read(numberOfTracks int) (*hfe.Disk, error) {
 				// Round to standard floppy drive bitrates: 250, 500, or 1000 kbps
 				// Use thresholds: < 375 -> 250, < 750 -> 500, >= 750 -> 1000
 				if calculatedBitRate < 375 {
-					calculatedBitRate = 250
+					if calculatedRPM == 360 {
+						calculatedBitRate = 300
+					} else {
+						calculatedBitRate = 250
+					}
 				} else if calculatedBitRate < 750 {
 					calculatedBitRate = 500
 				} else {

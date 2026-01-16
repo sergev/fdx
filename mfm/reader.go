@@ -300,16 +300,32 @@ func DetectFormatFromSize(fileSize int64) (cylinders, sides, sectorsPerTrack int
 		cylinders       int
 		sides           int
 		sectorsPerTrack int
-		totalSectors    int
 	}{
-		{80, 2, 18, 2880}, // 1.44MB
-		{80, 2, 9, 1440},  // 720KB
-		{40, 2, 9, 720},   // 360KB
-		{80, 2, 15, 2400}, // 1.2MB
+		// 3½" HD
+		{80, 2, 18}, // 1.44M
+		{80, 2, 20}, // 1.6M
+		// 3½" DD
+		{80, 2, 9},  // 720K
+		{80, 2, 10}, // 800K
+		// 3½" DD single side
+		{80, 1, 9}, // 360K
+		// 3½" ED
+		{80, 2, 36}, // 2.88M
+		{80, 2, 39}, // 3.12M
+		// 5¼" AT HD
+		{80, 2, 15}, // 1.2M
+		// 5¼" AT DD
+		{40, 2, 9}, // 360K
+		// 5¼" XT DD
+		{40, 2, 8}, // 320K
+		{40, 2, 9}, // 360K
+		// 5¼" XT DD single side
+		{40, 1, 8}, // 160K
+		{40, 1, 9}, // 180K
 	}
 
 	for _, format := range commonFormats {
-		if totalSectors == format.totalSectors {
+		if totalSectors == format.cylinders*format.sides*format.sectorsPerTrack {
 			return format.cylinders, format.sides, format.sectorsPerTrack, nil
 		}
 	}

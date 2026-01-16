@@ -218,7 +218,6 @@ func (w *Writer) EncodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTr
 // ----------------------------------------------------------------
 // 500 kbps    5¼"AT   1.2M    15         2      80      22    84
 //             3½"     1.44M   18         2      80      22    108
-//             5¼"AT   1.6M    20         2      80      22    44
 //             3½"     1.6M    20         2      80      22    44
 // ----------------------------------------------------------------
 // 250 kbps    5¼"SS   160K    8          1      40      22    80
@@ -230,12 +229,9 @@ func (w *Writer) EncodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTr
 //             3½"     800K    10         2      80      22    46
 // ----------------------------------------------------------------
 // 300 kbps    5¼"AT   360K    9          2      40      22    80
-//             5¼"AT   720K    9          2      80      22    80
-//             5¼"AT   800K    10         2      80      22    46
 // ----------------------------------------------------------------
 // 1000 kbps   3½"     2.88M   36         2      80      41    84
 //             3½"     3.12M   39         2      80      41    40
-//
 func computeGapsIBMPC(bitRate uint16, sectorsPerTrack int) (int, int) {
 
 	// gap2: empty bytes after sector header before sector data

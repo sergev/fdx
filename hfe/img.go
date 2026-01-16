@@ -10,76 +10,6 @@ const (
 	sectorSize = 512 // sector size in bytes
 )
 
-// Detect floppy format from file size
-// Return: cylinders, sides, sectorsPerTrack
-func detectFormatFromSize(fileSize int64) (cylinders, sides, sectorsPerTrack int, err error) {
-	// File size must be divisible by sector size
-	if fileSize%sectorSize != 0 {
-		return 0, 0, 0, fmt.Errorf("file size %d is not divisible by sector size %d", fileSize, sectorSize)
-	}
-
-	totalSectors := int(fileSize / sectorSize)
-
-	// Try common floppy format combinations
-	commonFormats := []struct {
-		cylinders       int
-		sides           int
-		sectorsPerTrack int
-	}{
-		// 3½" HD
-		{80, 2, 18}, // 1.44M
-		{80, 2, 20}, // 1.6M
-		// 3½" DD
-		{80, 2, 9},  // 720K
-		{80, 2, 10}, // 800K
-		// 3½" DD single side
-		{80, 1, 9},  // 360K
-		// 3½" ED
-		{80, 2, 36}, // 2.88M
-		{80, 2, 39}, // 3.12M
-		// 5¼" AT HD
-		{80, 2, 15}, // 1.2M
-		{80, 2, 20}, // 1.6M
-		// 5¼" AT DD
-		{80, 2, 9},  // 720K
-		{80, 2, 10}, // 800K
-		{40, 2, 9},  // 360K
-		// 5¼" XT DD
-		{40, 2, 8},  // 320K
-		{40, 2, 9},  // 360K
-		// 5¼" XT DD single side
-		{40, 1, 8},  // 160K
-		{40, 1, 9},  // 180K
-	}
-
-	for _, format := range commonFormats {
-		if totalSectors == format.cylinders*format.sides*format.sectorsPerTrack {
-			return format.cylinders, format.sides, format.sectorsPerTrack, nil
-		}
-	}
-
-	// If no match, try to factor total sectors
-	// Try common side counts (2 or 1)
-	for sides := 2; sides > 0; sides-- {
-		if totalSectors%sides != 0 {
-			continue
-		}
-		sectorsPerSide := totalSectors / sides
-
-		// Try common cylinder counts
-		for cylinders := 80; cylinders >= 40; cylinders -= 40 {
-			if sectorsPerSide%cylinders == 0 {
-				sectorsPerTrack := sectorsPerSide / cylinders
-				if sectorsPerTrack >= 8 && sectorsPerTrack <= 18 {
-					return cylinders, sides, sectorsPerTrack, nil
-				}
-			}
-		}
-	}
-
-	return 0, 0, 0, fmt.Errorf("unknown floppy image format %d sectors", totalSectors)
-}
-
 // Read a file in IMG or IMA format and return a Disk structure.
 func ReadIMG(filename string) (*Disk, error) {
 	file, err := os.Open(filename)
@@ -96,7 +26,7 @@ func ReadIMG(filename string) (*Disk, error) {
 	fileSize := fileInfo.Size()
 
 	// Detect format from file size
-	cylinders, sides, sectorsPerTrack, err := detectFormatFromSize(fileSize)
+	cylinders, sides, sectorsPerTrack, err := mfm.DetectFormatFromSize(fileSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect format: %w", err)
 	}
