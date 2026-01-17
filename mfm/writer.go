@@ -226,7 +226,7 @@ func (w *Writer) EncodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTr
 //             5¼"PC   360K    9          2      40      22    80
 //             3½"SS   360K    9          1      80      22    80
 //             3½"     720K    9          2      80      22    80
-//             3½"     800K    10         2      80      22    46
+//             3½"     800K    10         2      80      22    34
 // ----------------------------------------------------------------
 // 300 kbps    5¼"AT   360K    9          2      40      22    80
 // ----------------------------------------------------------------
@@ -260,7 +260,11 @@ func computeGapsIBMPC(bitRate uint16, sectorsPerTrack int) (int, int) {
 	case 250, 300:
 		sectorGap = 80
 		if sectorsPerTrack > 9 {
-			sectorGap = 46
+			// Recommended gap3 value for 800K format is 46, but
+			// it seems unstable: last sector sometimes not found.
+			// Greaseweazle uses 30, which looks too low.
+			// From my experience, 34 works well.
+			sectorGap = 34
 		}
 	}
 	return headerGap, sectorGap
