@@ -43,16 +43,18 @@ Supported image formats:
 		if len(args) > 0 {
 			filename = args[0]
 		}
-		if hfe.DetectImageFormat(filename) == hfe.ImageFormatUnknown {
-			cobra.CheckErr(fmt.Errorf("unknown image format: %s", filename))
-		}
 
 		// Compute number of cylinders to read
 		cylinders := config.Cyls
-		if hfe.DetectImageFormat(filename) == hfe.ImageFormatHFE {
+		switch hfe.DetectImageFormat(filename) {
+		case hfe.ImageFormatUnknown:
+			cobra.CheckErr(fmt.Errorf("unknown image format: %s", filename))
+		case hfe.ImageFormatHFE:
 			// For HFE, read two extra cylinders
 			cylinders += 2
 		}
+		fmt.Printf("Reading %d tracks, %d side(s)\n", cylinders, config.Heads)
+		fmt.Printf("\n")
 
 		// Prompt user to insert diskette
 		fmt.Print("Insert SOURCE diskette in drive\nand press Enter when ready...")

@@ -57,11 +57,19 @@ Supported image formats:
 		}
 
 		// Get number of tracks to write (but no more than extra 2 tracks)
-		numberOfTracks := int(disk.Header.NumberOfTrack)
-		if numberOfTracks > config.Cyls + 2 {
-			numberOfTracks = config.Cyls + 2
+		numCylinders := int(disk.Header.NumberOfTrack)
+		if numCylinders > config.Cyls + 2 {
+			numCylinders = config.Cyls + 2
 		}
-		fmt.Printf("Writing %d tracks, %d side(s)\n", numberOfTracks, disk.Header.NumberOfSide)
+		if hfe.DetectImageFormat(filename) != hfe.ImageFormatHFE {
+			if numCylinders >= 80 {
+				// Ignore extra cylinders
+				numCylinders = 80
+			} else if numCylinders > 40 {
+				numCylinders = 40
+			}
+		}
+		fmt.Printf("Writing %d tracks, %d side(s)\n", numCylinders, disk.Header.NumberOfSide)
 		fmt.Printf("Bit Rate: %d kbps\n", disk.Header.BitRate)
 		fmt.Printf("Rotation Speed: %d RPM\n", disk.Header.FloppyRPM)
 		fmt.Printf("\n")
@@ -73,7 +81,7 @@ Supported image formats:
 		fmt.Printf("\n")
 
 		// Write floppy disk using adapter interface
-		err = floppyAdapter.Write(disk, numberOfTracks)
+		err = floppyAdapter.Write(disk, numCylinders)
 		if err != nil {
 			cobra.CheckErr(fmt.Errorf("failed to write floppy disk: %w", err))
 		}

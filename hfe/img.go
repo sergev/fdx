@@ -127,10 +127,6 @@ func WriteIMG(filename string, disk *Disk) error {
 
 	// Figure out disk geometry
 	numCylinders := int(disk.Header.NumberOfTrack)
-	if numCylinders > 80 {
-		// Ignore extra cylinders
-		numCylinders = 80
-	}
 	numHeads := int(disk.Header.NumberOfSide)
 	numSectorsPerTrack := countSectors(disk.Tracks[0].Side0)
 	if numSectorsPerTrack < 8 || (numSectorsPerTrack > 23 && numSectorsPerTrack != 36) {
