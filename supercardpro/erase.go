@@ -3,6 +3,8 @@ package supercardpro
 import (
 	"encoding/binary"
 	"fmt"
+
+	"github.com/sergev/floppy/config"
 )
 
 // Generate minimal flux data for one revolution
@@ -50,9 +52,8 @@ func (c *Client) Erase(numberOfTracks int) error {
 		return fmt.Errorf("failed to load flux data: %w", err)
 	}
 
-	// Erase all tracks (typically 0-163 for 3.5" floppy: 82 tracks × 2 sides)
-	// Standard 3.5" DD floppy has 80 tracks, but we'll go up to 82 to be safe
-	maxTrack := uint(numberOfTracks * 2) // 82 cylinders × 2 sides
+	// Erase all tracks
+	maxTrack := uint(numberOfTracks * config.Heads)
 
 	for track := uint(0); track < maxTrack; track++ {
 		cyl := track >> 1

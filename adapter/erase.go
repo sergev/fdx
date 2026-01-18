@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sergev/floppy/config"
 	"github.com/spf13/cobra"
 )
 
@@ -23,8 +24,9 @@ var eraseCmd = &cobra.Command{
 		_, _ = reader.ReadString('\n')
 		fmt.Printf("\n")
 
-		// Read floppy disk using adapter interface
-		err := floppyAdapter.Erase(82)
+		// Erase floppy disk using adapter interface.
+		// Erase two extra cylinders.
+		err := floppyAdapter.Erase(config.Cyls + 2)
 		if err != nil {
 			cobra.CheckErr(fmt.Errorf("failed to erase floppy disk: %w", err))
 		}

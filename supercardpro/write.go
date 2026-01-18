@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/sergev/floppy/config"
 	"github.com/sergev/floppy/hfe"
 	"github.com/sergev/floppy/mfm"
 )
@@ -64,8 +65,8 @@ func (c *Client) Write(disk *hfe.Disk, numberOfTracks int) error {
 				fmt.Printf("Writing track %d, side %d...", cyl, head)
 			}
 
-			// Calculate track number (track = cyl * 2 + head)
-			track := uint(cyl*2 + head)
+			// Calculate track number
+			track := uint(cyl*config.Heads + head)
 
 			// Seek to track
 			err = c.seekTrack(track)

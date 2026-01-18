@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sergev/floppy/config"
 	"github.com/sergev/floppy/hfe"
 	"github.com/spf13/cobra"
 )
@@ -46,6 +47,13 @@ Supported image formats:
 			cobra.CheckErr(fmt.Errorf("unknown image format: %s", filename))
 		}
 
+		// Compute number of cylinders to read
+		cylinders := config.Cyls
+		if hfe.DetectImageFormat(filename) == hfe.ImageFormatHFE {
+			// For HFE, read two extra cylinders
+			cylinders += 2
+		}
+
 		// Prompt user to insert diskette
 		fmt.Print("Insert SOURCE diskette in drive\nand press Enter when ready...")
 		reader := bufio.NewReader(os.Stdin)
@@ -53,7 +61,7 @@ Supported image formats:
 		fmt.Printf("\n")
 
 		// Read floppy disk using adapter interface
-		disk, err := floppyAdapter.Read(82)
+		disk, err := floppyAdapter.Read(cylinders)
 		if err != nil {
 			cobra.CheckErr(fmt.Errorf("failed to read floppy disk: %w", err))
 		}

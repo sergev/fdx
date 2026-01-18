@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+
+	"github.com/sergev/floppy/config"
 )
 
 // Erase erases all tracks on the floppy disk
@@ -37,7 +39,7 @@ func (c *Client) Erase(numberOfTracks int) error {
 
 	// Iterate through all cylinders and heads (same as Read())
 	for cyl := 0; cyl < numberOfTracks; cyl++ {
-		for head := 0; head < 2; head++ {
+		for head := 0; head < config.Heads; head++ {
 			// Print progress message
 			if cyl != 0 || head != 0 {
 				fmt.Printf("\rErasing track %d, side %d...", cyl, head)

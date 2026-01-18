@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/sergev/floppy/config"
 	"github.com/sergev/floppy/hfe"
 	"github.com/sergev/floppy/mfm"
 )
@@ -358,7 +359,7 @@ func (c *Client) Read(numberOfTracks int) (*hfe.Disk, error) {
 	disk := &hfe.Disk{
 		Header: hfe.Header{
 			NumberOfTrack:       uint8(numberOfTracks),
-			NumberOfSide:        2,
+			NumberOfSide:        uint8(config.Heads),
 			TrackEncoding:       hfe.ENC_ISOIBM_MFM,
 			BitRate:             500,              // Will be calculated from flux data
 			FloppyRPM:           300,              // Will be calculated from flux data
@@ -376,7 +377,7 @@ func (c *Client) Read(numberOfTracks int) (*hfe.Disk, error) {
 
 	// Iterate through cylinders and heads
 	for cyl := 0; cyl < numberOfTracks; cyl++ {
-		for head := 0; head < 2; head++ {
+		for head := 0; head < config.Heads; head++ {
 			// Print progress message
 			if cyl != 0 || head != 0 {
 				fmt.Printf("\rReading track %d, side %d...", cyl, head)

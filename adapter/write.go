@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sergev/floppy/config"
 	"github.com/sergev/floppy/hfe"
 	"github.com/spf13/cobra"
 )
@@ -45,10 +46,20 @@ Supported image formats:
 			cobra.CheckErr(fmt.Errorf("failed to read file: %w", err))
 		}
 
-		// Get number of tracks to write (but no more than standard 82 tracks)
+		// Match image versus drive.
+		if int(disk.Header.BitRate) > config.MaxKBps {
+			cobra.CheckErr(fmt.Errorf("Image with bit rate %d kbps is incompatible with drive %s",
+								      disk.Header.BitRate, config.DriveName))
+		}
+		if int(disk.Header.NumberOfSide) > config.Heads {
+			cobra.CheckErr(fmt.Errorf("Image with %d sides is incompatible with drive %s",
+								      disk.Header.NumberOfSide, config.DriveName))
+		}
+
+		// Get number of tracks to write (but no more than extra 2 tracks)
 		numberOfTracks := int(disk.Header.NumberOfTrack)
-		if numberOfTracks > 82 {
-			numberOfTracks = 82
+		if numberOfTracks > config.Cyls + 2 {
+			numberOfTracks = config.Cyls + 2
 		}
 		fmt.Printf("Writing %d tracks, %d side(s)\n", numberOfTracks, disk.Header.NumberOfSide)
 		fmt.Printf("Bit Rate: %d kbps\n", disk.Header.BitRate)

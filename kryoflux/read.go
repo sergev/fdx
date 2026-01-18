@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sergev/floppy/config"
 	"github.com/sergev/floppy/hfe"
 	"github.com/sergev/floppy/mfm"
 )
@@ -501,7 +502,7 @@ func (c *Client) decodeFluxToMFM(decoded *DecodedStreamData, bitRateKhz uint16) 
 func (c *Client) Read(numberOfTracks int) (*hfe.Disk, error) {
 
 	// Configure device with default values (device=0, density=0, minTrack=0, maxTrack=N-1)
-	err := c.configure(0, 0, 0, numberOfTracks - 1)
+	err := c.configure(0, 0, 0, numberOfTracks-1)
 	if err != nil {
 		return nil, fmt.Errorf("failed to configure device: %w", err)
 	}
@@ -510,7 +511,7 @@ func (c *Client) Read(numberOfTracks int) (*hfe.Disk, error) {
 	disk := &hfe.Disk{
 		Header: hfe.Header{
 			NumberOfTrack:       uint8(numberOfTracks),
-			NumberOfSide:        2,
+			NumberOfSide:        uint8(config.Heads),
 			TrackEncoding:       hfe.ENC_ISOIBM_MFM,
 			BitRate:             500,              // Will be calculated from flux data
 			FloppyRPM:           300,              // Will be calculated from flux data
@@ -531,7 +532,7 @@ func (c *Client) Read(numberOfTracks int) (*hfe.Disk, error) {
 
 	// Iterate through cylinders and sides
 	for cyl := 0; cyl < numberOfTracks; cyl++ {
-		for side := 0; side < 2; side++ {
+		for side := 0; side < config.Heads; side++ {
 			// Print progress message
 			if cyl != 0 || side != 0 {
 				fmt.Printf("\rReading track %d, side %d...", cyl, side)
