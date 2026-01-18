@@ -1,0 +1,167 @@
+default = "3.5-inch 1.44M"
+
+#
+# Array of supported floppy drives
+#
+[[drive]]
+    name = "5.25-inch 180K"
+    cyls = 40
+    heads = 1
+    rpm = 300
+    maxkbps = 250
+    images = [
+        "IBM DD 180K Single Side",
+        "IBM DD 160K Single Side",
+    ]
+[[drive]]
+    name = "5.25-inch 360K"
+    cyls = 40
+    heads = 2
+    rpm = 300
+    maxkbps = 250
+    images = [
+        "IBM DD 360K",
+        "IBM DD 400K",
+        "IBM DD 320K",
+        "IBM DD 180K Single Side",
+        "IBM DD 160K Single Side",
+    ]
+[[drive]]
+    name = "5.25-inch 720K"
+    cyls = 80
+    heads = 2
+    rpm = 300
+    maxkbps = 250
+    images = [
+        "IBM DD 720K",
+        "IBM DD 800K",
+        "IBM DD 360K Stretch",
+        "IBM DD 400K Stretch",
+        "IBM DD 320K Stretch",
+        "IBM DD 360K Single Side",
+        "IBM DD 400K Single Side",
+        "IBM DD 180K Single Side",
+        "IBM DD 160K Single Side",
+        "Amiga 880K",
+        "BK-0010 800K",
+    ]
+[[drive]]
+    name = "5.25-inch 1.2M"
+    cyls = 80
+    heads = 2
+    rpm = 360
+    maxkbps = 500
+    images = [
+        "IBM HD 1.2M",
+    ]
+[[drive]]
+    name = "3.5-inch 360K"
+    cyls = 80
+    heads = 1
+    rpm = 300
+    maxkbps = 250
+    images = [
+        "IBM DD 360K Single Side",
+        "IBM DD 400K Single Side",
+    ]
+[[drive]]
+    name = "3.5-inch 720K"
+    cyls = 80
+    heads = 2
+    rpm = 300
+    maxkbps = 250
+    images = [
+        "IBM DD 720K",
+        "IBM DD 800K",
+        "IBM DD 360K Single Side",
+        "IBM DD 400K Single Side",
+        "Amiga 880K",
+        "BK-0010 800K",
+    ]
+[[drive]]
+    name = "3.5-inch 1.44M"
+    cyls = 80
+    heads = 2
+    rpm = 300
+    maxkbps = 500
+    images = [
+        "IBM HD 1.44M",
+        "IBM HD 1.6M",
+        "IBM DD 720K",
+        "IBM DD 800K",
+        "IBM DD 360K Single Side",
+        "IBM DD 400K Single Side",
+        "Linux 1.44M",
+        "BSD 1.44M",
+        "Amiga 880K",
+        "BK-0010 800K",
+    ]
+[[drive]]
+    name = "3.5-inch 2.88M"
+    cyls = 80
+    heads = 2
+    rpm = 300
+    maxkbps = 1000
+    images = [
+        "IBM ED 2.88M",
+        "IBM ED 3.12M",
+        "IBM HD 1.44M",
+        "IBM HD 1.6M",
+        "IBM DD 720K",
+        "IBM DD 800K",
+        "IBM DD 360K Single Side",
+        "IBM DD 400K Single Side",
+        "Linux 1.44M",
+        "BSD 1.44M",
+        "Amiga 880K",
+        "BK-0010 800K",
+    ]
+
+#
+# Array of built-in images for 'format' command
+#
+[[image]]
+    name = "IBM DD 160K Single Side"
+    file = "fat160.img"
+[[image]]
+    name = "IBM DD 180K Single Side"
+    file = "fat180.img"
+[[image]]
+    name = "IBM DD 360K Single Side"
+    file = "fat360.img"
+[[image]]
+    name = "IBM DD 400K Single Side"
+    file = "fat400.img"
+[[image]]
+    name = "IBM DD 720K"
+    file = "fat720.img"
+[[image]]
+    name = "IBM DD 800K"
+    file = "fat800.img"
+[[image]]
+    name = "IBM HD 1.2M"
+    file = "fat1.2.img"
+[[image]]
+    name = "IBM HD 1.44M"
+    file = "fat1.44.img"
+[[image]]
+    name = "IBM HD 1.6M"
+    file = "fat1.6.img"
+[[image]]
+    name = "IBM ED 2.88M"
+    file = "fat2.88.img"
+[[image]]
+    name = "IBM ED 3.12M"
+    file = "fat3.12.img"
+[[image]]
+    name = "Linux 1.44M"
+    file = "linux1.44.img"
+[[image]]
+    name = "BSD 1.44M"
+    file = "bsd1.44.img"
+[[image]]
+    name = "Amiga 880K"
+    file = "blank.adf"
+[[image]]
+    name = "BK-0010 800K"
+    file = "blank.bkd"

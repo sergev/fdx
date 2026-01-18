@@ -15,9 +15,9 @@ Reads contents of the SRC.EXT file and writes it to DEST.EXT file.
 Format of floppy image is defined by extension.
 USB adapter is not used.
 Supported image formats:
-	adf        - Amiga Disk File
-    hfe        - HxC Floppy Emulator
-    img or ima - raw binary contents of the entire disk`,
+    *.adf          - Amiga Disk File
+    *.hfe          - HxC Floppy Emulator
+    *.img or *.ima - raw binary contents of the entire disk`,
 	// TODO: bkd        - BK-0010/0011M Disk image
 	// TODO: cp2        - Central Point Software's Copy-II-PC
 	// TODO: dcf        - Disk Copy Fast utility
