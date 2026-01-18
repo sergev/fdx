@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/sergev/floppy/config"
 	"github.com/spf13/cobra"
 	"go.bug.st/serial/enumerator"
 )
@@ -22,6 +23,12 @@ var rootCmd = &cobra.Command{
 		floppyAdapter, err = findAdapter()
 		if err != nil {
 			cobra.CheckErr(fmt.Errorf("%w", err))
+		}
+
+		// Initialize configuration
+		err = config.Initialize()
+		if err != nil {
+			cobra.CheckErr(fmt.Errorf("failed to initialize config: %w", err))
 		}
 	},
 }
