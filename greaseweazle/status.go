@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-        "github.com/sergev/floppy/config"
+	"github.com/sergev/floppy/config"
 )
 
 // fetchBwStats retrieves bandwidth statistics from the Greaseweazle device

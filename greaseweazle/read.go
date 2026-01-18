@@ -59,6 +59,12 @@ func (c *Client) ReadFlux(ticks uint32, maxIndex uint16) ([]byte, error) {
 		data = append(data, buf[0])
 	}
 
+	if len(data) == 0 {
+		return nil, fmt.Errorf("no flux data")
+	}
+	if len(data) < 60000 {
+		return nil, fmt.Errorf("bad flux data")
+	}
 	return data, nil
 }
 
@@ -152,10 +158,14 @@ func (c *Client) calculateRPMAndBitRate(fluxData []byte) (uint16, uint16) {
 	// Calculate RPM: 60 seconds per minute / period in seconds
 	//
 	trackDurationNs := indexPulses[1] - indexPulses[0]
-	//fmt.Printf("--- trackDurationNs = %d\n", trackDurationNs)
+	if DebugFlag {
+		fmt.Printf("--- trackDurationNs = %d\n", trackDurationNs)
+	}
 
 	rpm := 60e9 / trackDurationNs
-	//fmt.Printf("--- rpm = %d\n", rpm)
+	if DebugFlag {
+		fmt.Printf("--- rpm = %d\n", rpm)
+	}
 
 	// Round to either 300 or 360 RPM (standard floppy drive speeds)
 	// Use 330 RPM as the threshold (midpoint between 300 and 360)
@@ -169,7 +179,10 @@ func (c *Client) calculateRPMAndBitRate(fluxData []byte) (uint16, uint16) {
 	// Calculate bit rate
 	//
 	bitsPerMsec := countTransitions * 1e6 / trackDurationNs
-	//fmt.Printf("--- bitsPerMsec = %d\n", bitsPerMsec)
+	if DebugFlag {
+		fmt.Printf("--- countTransitions = %d\n", countTransitions)
+		fmt.Printf("--- bitsPerMsec = %d\n", bitsPerMsec)
+	}
 
 	// Round to standard floppy drive bitrates: 250, 500, or 1000 kbps
 	// Use thresholds: < 375 -> 250, < 750 -> 500, >= 750 -> 1000
