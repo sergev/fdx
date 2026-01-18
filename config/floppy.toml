@@ -133,6 +133,15 @@ default = "3.5-inch 1.44M"
     name = "IBM DD 400K Single Side"
     file = "fat400.img"
 [[image]]
+    name = "IBM DD 320K"
+    file = "fat320.img"
+[[image]]
+    name = "IBM DD 360K"
+    file = "fat360.img"
+[[image]]
+    name = "IBM DD 400K"
+    file = "fat400.img"
+[[image]]
     name = "IBM DD 720K"
     file = "fat720.img"
 [[image]]

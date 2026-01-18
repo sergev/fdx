@@ -16,11 +16,12 @@ var defaultConfigData []byte
 
 // Global state variables for the selected drive
 var (
-	Cyls    int
-	Heads   int
-	RPM     int
-	MaxKBps int
-	Images  []string
+	DriveName string
+	Cyls      int
+	Heads     int
+	RPM       int
+	MaxKBps   int
+	Images    []string
 )
 
 // Config represents the entire TOML configuration structure
@@ -136,6 +137,7 @@ func Initialize() error {
 	}
 
 	// 8. Store drive properties in global variables
+        DriveName = conf.Default
 	Cyls = foundDrive.Cyls
 	Heads = foundDrive.Heads
 	RPM = foundDrive.RPM

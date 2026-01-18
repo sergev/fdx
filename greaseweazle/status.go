@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+
+        "github.com/sergev/floppy/config"
 )
 
 // fetchBwStats retrieves bandwidth statistics from the Greaseweazle device
@@ -208,7 +210,7 @@ func (c *Client) PrintStatus() {
 	if !driveIsConnected {
 		fmt.Printf("Floppy Drive: Not detected\n")
 	} else {
-		fmt.Printf("Floppy Drive: Connected\n")
+		fmt.Printf("Floppy Drive: %s\n", config.DriveName)
 		c.PrintRotationSpeed()
 	}
 }
