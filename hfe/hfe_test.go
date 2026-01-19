@@ -568,10 +568,10 @@ func TestRead_InvalidSideCount(t *testing.T) {
 
 // Test 6: File Reading Integration Tests
 
-// getTestDataPath returns the path to a testdata file, trying multiple locations
+// getTestDataPath returns the path to test images, trying multiple locations
 func getTestDataPath(filename string) string {
 	// Try relative to module root (go test runs from module root)
-	testdataPath := filepath.Join("testdata", filename)
+	testdataPath := filepath.Join("images", filename)
 	if _, err := os.Stat(testdataPath); err == nil {
 		return testdataPath
 	}
@@ -593,9 +593,9 @@ func findSampleFile(t *testing.T, filename string) string {
 	}
 
 	possiblePaths := []string{
-		filepath.Join(wd, "testdata", filename),
-		filepath.Join(wd, "..", "testdata", filename),
-		filepath.Join("testdata", filename),
+		filepath.Join(wd, "images", filename),
+		filepath.Join(wd, "..", "images", filename),
+		filepath.Join("images", filename),
 	}
 
 	for _, path := range possiblePaths {
