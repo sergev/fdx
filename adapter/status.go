@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/sergev/floppy/config"
 )
 
 var statusCmd = &cobra.Command{
@@ -17,6 +18,11 @@ var statusCmd = &cobra.Command{
 
 		// Print status information
 		floppyAdapter.PrintStatus()
+
+		fmt.Printf("\nConfiguration script: ~/.floppy\n")
+		fmt.Printf("Floppy Drive: %s\n", config.DriveName)
+		fmt.Printf("Geometry: %d tracks, %d side(s)\n", config.Cyls, config.Heads)
+		fmt.Printf("Speed: %d RPM, max %d kbps\n", config.RPM, config.MaxKBps)
 	},
 }
 
