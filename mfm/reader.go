@@ -206,6 +206,8 @@ func (r *Reader) ReadSectorIBMPC(cylinder, head int) (int, []byte, error) {
 		myDataSum = crc16CCITT(myDataSum, data)
 		if myDataSum != dataSum {
 			// CRC mismatch, but use the data anyway
+			fmt.Printf("Warning: bad checksum in sector %d of track %d\n", sector, cylinder, head)
+			continue
 		}
 
 		// Return sector number (0-based) and data
