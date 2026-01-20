@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/sergev/floppy/mfm"
 )
 
 func TestReadIMDFile(t *testing.T) {
@@ -315,4 +317,237 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// extractSectorsFromTrack extracts all sectors from a track's MFM bitstream
+func extractSectorsFromTrack(trackData []byte, cylinder, head, expectedSectors int) (map[int][]byte, error) {
+	if len(trackData) == 0 {
+		return make(map[int][]byte), nil
+	}
+
+	reader := mfm.NewReader(trackData)
+	sectors := make(map[int][]byte)
+
+	// Read sectors sequentially until we can't find any more
+	for len(sectors) < expectedSectors {
+		sectorNum, sectorData, err := reader.ReadSectorIBMPC(cylinder, head)
+		if err != nil {
+			// End of track or error, break
+			break
+		}
+
+		// Validate sector number
+		if sectorNum < 0 || sectorNum >= expectedSectors {
+			// Invalid sector number, continue searching
+			continue
+		}
+
+		// Store sector (overwrite if duplicate)
+		sectors[sectorNum] = sectorData
+	}
+
+	return sectors, nil
+}
+
+func TestConvertIMDToHFE(t *testing.T) {
+	// Find the expected HFE file (may be gzipped)
+	hfeFile := findSampleFile(t, "fat360.hfe.gz")
+	if hfeFile == "" {
+		return // Test was skipped
+	}
+
+	// Decompress if needed
+	decompressedHFE := decompressFile(t, hfeFile)
+
+	// Read expected HFE file
+	expectedDisk, err := ReadHFE(decompressedHFE)
+	if err != nil {
+		t.Fatalf("ReadHFE() error: %v", err)
+	}
+
+	// Find and read the IMD file
+	imdFile := findSampleFile(t, "fat360.imd")
+	if imdFile == "" {
+		return // Test was skipped
+	}
+
+	// Read IMD file
+	imdImage, err := ReadIMDFile(imdFile)
+	if err != nil {
+		t.Fatalf("ReadIMDFile() error: %v", err)
+	}
+
+	// Convert IMD to HFE
+	convertedDisk, err := ConvertIMDToHFE(imdImage)
+	if err != nil {
+		t.Fatalf("ConvertIMDToHFE() error: %v", err)
+	}
+
+	// Compare headers
+	if convertedDisk.Header.NumberOfTrack != expectedDisk.Header.NumberOfTrack {
+		t.Errorf("NumberOfTrack = %d, expected %d", convertedDisk.Header.NumberOfTrack, expectedDisk.Header.NumberOfTrack)
+	}
+
+	if convertedDisk.Header.NumberOfSide != expectedDisk.Header.NumberOfSide {
+		t.Errorf("NumberOfSide = %d, expected %d", convertedDisk.Header.NumberOfSide, expectedDisk.Header.NumberOfSide)
+	}
+
+	if convertedDisk.Header.BitRate != expectedDisk.Header.BitRate {
+		t.Errorf("BitRate = %d, expected %d", convertedDisk.Header.BitRate, expectedDisk.Header.BitRate)
+	}
+
+	// TrackEncoding: Skip comparison if expected is ENC_Unknown (0xFF), as we correctly determine encoding from IMD data
+	if expectedDisk.Header.TrackEncoding != ENC_Unknown {
+		if convertedDisk.Header.TrackEncoding != expectedDisk.Header.TrackEncoding {
+			t.Errorf("TrackEncoding = %d, expected %d", convertedDisk.Header.TrackEncoding, expectedDisk.Header.TrackEncoding)
+		}
+	}
+
+	if convertedDisk.Header.FloppyRPM != expectedDisk.Header.FloppyRPM {
+		t.Errorf("FloppyRPM = %d, expected %d", convertedDisk.Header.FloppyRPM, expectedDisk.Header.FloppyRPM)
+	}
+
+	// Compare track array sizes
+	if len(convertedDisk.Tracks) != len(expectedDisk.Tracks) {
+		t.Fatalf("Track array size = %d, expected %d", len(convertedDisk.Tracks), len(expectedDisk.Tracks))
+	}
+
+	// Compare each track
+	for cyl := 0; cyl < len(convertedDisk.Tracks); cyl++ {
+		// Compare Side0 length, approximately
+		lenConverted := len(convertedDisk.Tracks[cyl].Side0)
+		lenExpected := len(expectedDisk.Tracks[cyl].Side0)
+		if lenConverted/100 != lenExpected/100 {
+			t.Errorf("Track %d Side0 size = %d, expected %d", cyl, lenConverted, lenExpected)
+			continue
+		}
+
+		// Extract sectors from both tracks and compare
+		if len(convertedDisk.Tracks[cyl].Side0) > 0 {
+			// Determine number of sectors per track from IMD
+			var sectorsPerTrack int
+			for _, track := range imdImage.Tracks {
+				if int(track.Cylinder) == cyl && (track.Head&0x0F) == 0 {
+					sectorsPerTrack = int(track.Nsec)
+					break
+				}
+			}
+
+			if sectorsPerTrack > 0 {
+				convertedSectors, err := extractSectorsFromTrack(convertedDisk.Tracks[cyl].Side0, cyl, 0, sectorsPerTrack)
+				if err != nil {
+					t.Errorf("Failed to extract sectors from converted track %d side 0: %v", cyl, err)
+					continue
+				}
+
+				expectedSectors, err := extractSectorsFromTrack(expectedDisk.Tracks[cyl].Side0, cyl, 0, sectorsPerTrack)
+				if err != nil {
+					t.Errorf("Failed to extract sectors from expected track %d side 0: %v", cyl, err)
+					continue
+				}
+
+				// Compare sector counts
+				if len(convertedSectors) != len(expectedSectors) {
+					t.Errorf("Track %d Side0: converted has %d sectors, expected %d", cyl, len(convertedSectors), len(expectedSectors))
+					continue
+				}
+
+				// Compare each sector's content
+				for sectorNum := 0; sectorNum < sectorsPerTrack; sectorNum++ {
+					convertedData, convertedExists := convertedSectors[sectorNum]
+					expectedData, expectedExists := expectedSectors[sectorNum]
+
+					if convertedExists != expectedExists {
+						t.Errorf("Track %d Side0 Sector %d: converted exists=%v, expected exists=%v", cyl, sectorNum, convertedExists, expectedExists)
+						continue
+					}
+
+					if convertedExists {
+						if len(convertedData) != len(expectedData) {
+							t.Errorf("Track %d Side0 Sector %d: size = %d, expected %d", cyl, sectorNum, len(convertedData), len(expectedData))
+							continue
+						}
+
+						// Compare sector data byte by byte
+						for i := 0; i < len(convertedData); i++ {
+							if convertedData[i] != expectedData[i] {
+								t.Errorf("Track %d Side0 Sector %d byte %d: converted=0x%02X, expected=0x%02X", cyl, sectorNum, i, convertedData[i], expectedData[i])
+								// Only report first mismatch per sector
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Compare Side1 if present
+		if convertedDisk.Header.NumberOfSide > 1 {
+			lenConverted := len(convertedDisk.Tracks[cyl].Side1)
+			lenExpected := len(expectedDisk.Tracks[cyl].Side1)
+			if lenConverted/100 != lenExpected/100 {
+				t.Errorf("Track %d Side1 size = %d, expected %d", cyl, lenConverted, lenExpected)
+				continue
+			}
+
+			// Extract sectors from both tracks and compare
+			if len(convertedDisk.Tracks[cyl].Side1) > 0 {
+				// Determine number of sectors per track from IMD
+				var sectorsPerTrack int
+				for _, track := range imdImage.Tracks {
+					if int(track.Cylinder) == cyl && (track.Head&0x0F) == 1 {
+						sectorsPerTrack = int(track.Nsec)
+						break
+					}
+				}
+
+				if sectorsPerTrack > 0 {
+					convertedSectors, err := extractSectorsFromTrack(convertedDisk.Tracks[cyl].Side1, cyl, 1, sectorsPerTrack)
+					if err != nil {
+						t.Errorf("Failed to extract sectors from converted track %d side 1: %v", cyl, err)
+						continue
+					}
+
+					expectedSectors, err := extractSectorsFromTrack(expectedDisk.Tracks[cyl].Side1, cyl, 1, sectorsPerTrack)
+					if err != nil {
+						t.Errorf("Failed to extract sectors from expected track %d side 1: %v", cyl, err)
+						continue
+					}
+
+					// Compare sector counts
+					if len(convertedSectors) != len(expectedSectors) {
+						t.Errorf("Track %d Side1: converted has %d sectors, expected %d", cyl, len(convertedSectors), len(expectedSectors))
+						continue
+					}
+
+					// Compare each sector's content
+					for sectorNum := 0; sectorNum < sectorsPerTrack; sectorNum++ {
+						convertedData, convertedExists := convertedSectors[sectorNum]
+						expectedData, expectedExists := expectedSectors[sectorNum]
+
+						if convertedExists != expectedExists {
+							t.Errorf("Track %d Side1 Sector %d: converted exists=%v, expected exists=%v", cyl, sectorNum, convertedExists, expectedExists)
+							continue
+						}
+
+						if convertedExists {
+							if len(convertedData) != len(expectedData) {
+								t.Errorf("Track %d Side1 Sector %d: size = %d, expected %d", cyl, sectorNum, len(convertedData), len(expectedData))
+								continue
+							}
+
+							// Compare sector data byte by byte
+							for i := 0; i < len(convertedData); i++ {
+								if convertedData[i] != expectedData[i] {
+									t.Errorf("Track %d Side1 Sector %d byte %d: converted=0x%02X, expected=0x%02X", cyl, sectorNum, i, convertedData[i], expectedData[i])
+									// Only report first mismatch per sector
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }

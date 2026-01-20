@@ -15,11 +15,11 @@ const supportedImageFormatsText = `Supported image formats:
   *.adf          - Amiga Disk File
   *.bkd          - BK-0010/0011M Disk image
   *.hfe          - HxC Floppy Emulator
+  *.imd          - Dave Dunfield's ImageDisk utility
   *.img or *.ima - raw binary contents of the entire disk`
 	// TODO: cp2        - Central Point Software's Copy-II-PC
 	// TODO: dcf        - Disk Copy Fast utility
 	// TODO: epl        - EPLCopy utility
-	// TODO: imd        - Dave Dunfield's ImageDisk utility
 	// TODO: mfm        - low-level MFM encoded bit stream
 	// TODO: pdi        - Upland's PlanetPress
 	// TODO: pri        - PCE Raw Image

@@ -287,12 +287,100 @@ func ConvertIMDToHFE(img *IMDImage) (*Disk, error) {
 		Tracks: make([]TrackData, numTracks),
 	}
 
-	// TODO: Convert IMD sector data to MFM bitstreams
-	// For now, create empty tracks
+	// Initialize all tracks with empty data
 	for i := range disk.Tracks {
 		disk.Tracks[i] = TrackData{
 			Side0: make([]byte, 0),
 			Side1: make([]byte, 0),
+		}
+	}
+
+	// Convert IMD sector data to MFM bitstreams
+	for _, track := range img.Tracks {
+		// Skip null tracks (no sectors)
+		if track.Nsec == 0 {
+			continue
+		}
+
+		// Extract track metadata
+		headNum := track.Head & 0x0F
+		cylinder := int(track.Cylinder)
+		secSize := imdSectorSize(track.Ssize)
+		if secSize == 0 {
+			return nil, fmt.Errorf("invalid sector size encoding: %d for track %d/%d", track.Ssize, track.Cylinder, headNum)
+		}
+
+		// Get bit rate and encoding for this track
+		rate, _, err := modeToRateDensity(track.Mode)
+		if err != nil {
+			return nil, fmt.Errorf("invalid mode value: %d for track %d/%d: %w", track.Mode, track.Cylinder, headNum, err)
+		}
+		trackBitRate := uint16(rate)
+
+		// Validate cylinder and head are within disk bounds
+		if cylinder >= int(numTracks) {
+			return nil, fmt.Errorf("cylinder %d exceeds disk capacity (%d tracks)", cylinder, numTracks)
+		}
+		if headNum >= numSides {
+			return nil, fmt.Errorf("head %d exceeds disk capacity (%d sides)", headNum, numSides)
+		}
+
+		// Map IMD sectors from physical order to sequential logical order
+		// IMD stores sectors in physical order with SectorMap[i] containing logical sector number
+		trackSectors := make([][]byte, track.Nsec)
+		for i := byte(0); i < track.Nsec; i++ {
+			// Get logical sector number from SectorMap (typically 1-based)
+			if int(i) >= len(track.SectorMap) {
+				return nil, fmt.Errorf("sector map index %d out of range for track %d/%d", i, track.Cylinder, headNum)
+			}
+			logicalSectorNum := track.SectorMap[i]
+
+			// Convert to 0-based array index (logical sector numbers are 1-based)
+			arrayIndex := int(logicalSectorNum) - 1
+
+			// Validate array index is in range
+			if arrayIndex < 0 || arrayIndex >= int(track.Nsec) {
+				return nil, fmt.Errorf("invalid logical sector number %d (out of range 1-%d) for track %d/%d", logicalSectorNum, track.Nsec, track.Cylinder, headNum)
+			}
+
+			// Get sector data
+			if int(i) >= len(track.Sectors) {
+				return nil, fmt.Errorf("sector index %d out of range for track %d/%d", i, track.Cylinder, headNum)
+			}
+			sector := track.Sectors[i]
+
+			// Handle missing data (flag == 0): fill with zeros
+			if sector.Flag == 0 || sector.Data == nil {
+				// Missing sector - fill with zeros
+				trackSectors[arrayIndex] = make([]byte, secSize)
+			} else {
+				// Use sector data (already expanded if compressed)
+				sectorData := make([]byte, secSize)
+				if len(sector.Data) > 0 {
+					copy(sectorData, sector.Data)
+					// Pad or truncate if size mismatch
+					if len(sector.Data) < secSize {
+						// Already padded with zeros by make()
+					} else if len(sector.Data) > secSize {
+						sectorData = sectorData[:secSize]
+					}
+				}
+				trackSectors[arrayIndex] = sectorData
+			}
+		}
+
+		// Calculate maxHalfBits using formula from ReadIMG()
+		maxHalfBits := int(trackBitRate) * 1000 * 60 / int(disk.Header.FloppyRPM) * 2
+
+		// Encode track to MFM
+		writer := mfm.NewWriter(maxHalfBits)
+		mfmData := writer.EncodeTrackIBMPC(trackSectors, cylinder, int(headNum), int(track.Nsec), trackBitRate)
+
+		// Store in appropriate side
+		if headNum == 0 {
+			disk.Tracks[cylinder].Side0 = mfmData
+		} else {
+			disk.Tracks[cylinder].Side1 = mfmData
 		}
 	}
 
