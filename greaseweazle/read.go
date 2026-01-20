@@ -63,9 +63,6 @@ func (c *Client) ReadFlux(ticks uint32, maxIndex uint16) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("no flux data")
 	}
-	if len(data) < 60000 {
-		return nil, fmt.Errorf("bad flux data")
-	}
 	return data, nil
 }
 

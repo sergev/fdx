@@ -144,7 +144,7 @@ func (c *Client) PrintRotationSpeed() {
 
 	// Read flux data (0 ticks = no limit, 2 index pulses = 2 revolutions)
 	fluxData, err := c.ReadFlux(0, 2)
-	if err != nil {
+	if err != nil || len(fluxData) < 60000 {
 		fmt.Printf("Floppy Disk: Not inserted\n")
 		return
 	}
