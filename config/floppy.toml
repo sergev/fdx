@@ -10,8 +10,8 @@ default = "3.5-inch 1.44M"
     rpm = 300
     maxkbps = 250
     images = [
-        "IBM DD 180K Single Side",
-        "IBM DD 160K Single Side",
+        "MS-DOS 180K Single Side",
+        "MS-DOS 160K Single Side",
     ]
 [[drive]]
     name = "5.25-inch 360K"
@@ -20,11 +20,11 @@ default = "3.5-inch 1.44M"
     rpm = 300
     maxkbps = 250
     images = [
-        "IBM DD 360K",
-        "IBM DD 400K",
-        "IBM DD 320K",
-        "IBM DD 180K Single Side",
-        "IBM DD 160K Single Side",
+        "MS-DOS 360K",
+        "MS-DOS 400K",
+        "MS-DOS 320K",
+        "MS-DOS 180K Single Side",
+        "MS-DOS 160K Single Side",
     ]
 [[drive]]
     name = "5.25-inch 720K"
@@ -33,15 +33,15 @@ default = "3.5-inch 1.44M"
     rpm = 300
     maxkbps = 250
     images = [
-        "IBM DD 720K",
-        "IBM DD 800K",
-        "IBM DD 360K Stretch",
-        "IBM DD 400K Stretch",
-        "IBM DD 320K Stretch",
-        "IBM DD 360K Single Side",
-        "IBM DD 400K Single Side",
-        "IBM DD 180K Single Side",
-        "IBM DD 160K Single Side",
+        "MS-DOS 720K",
+        "MS-DOS 800K",
+        "MS-DOS 360K Stretch",
+        "MS-DOS 400K Stretch",
+        "MS-DOS 320K Stretch",
+        "MS-DOS 360K Single Side",
+        "MS-DOS 400K Single Side",
+        "MS-DOS 180K Single Side",
+        "MS-DOS 160K Single Side",
         "Amiga 880K",
         "BK-0010 800K",
     ]
@@ -52,7 +52,7 @@ default = "3.5-inch 1.44M"
     rpm = 360
     maxkbps = 500
     images = [
-        "IBM HD 1.2M",
+        "MS-DOS 1.2M",
     ]
 [[drive]]
     name = "3.5-inch 360K"
@@ -61,8 +61,8 @@ default = "3.5-inch 1.44M"
     rpm = 300
     maxkbps = 250
     images = [
-        "IBM DD 360K Single Side",
-        "IBM DD 400K Single Side",
+        "MS-DOS 360K Single Side",
+        "MS-DOS 400K Single Side",
     ]
 [[drive]]
     name = "3.5-inch 720K"
@@ -71,10 +71,10 @@ default = "3.5-inch 1.44M"
     rpm = 300
     maxkbps = 250
     images = [
-        "IBM DD 720K",
-        "IBM DD 800K",
-        "IBM DD 360K Single Side",
-        "IBM DD 400K Single Side",
+        "MS-DOS 720K",
+        "MS-DOS 800K",
+        "MS-DOS 360K Single Side",
+        "MS-DOS 400K Single Side",
         "Amiga 880K",
         "BK-0010 800K",
     ]
@@ -85,12 +85,12 @@ default = "3.5-inch 1.44M"
     rpm = 300
     maxkbps = 500
     images = [
-        "IBM HD 1.44M",
-        "IBM HD 1.6M",
-        "IBM DD 720K",
-        "IBM DD 800K",
-        "IBM DD 360K Single Side",
-        "IBM DD 400K Single Side",
+        "MS-DOS 1.44M",
+        "MS-DOS 1.6M",
+        "MS-DOS 720K",
+        "MS-DOS 800K",
+        "MS-DOS 360K Single Side",
+        "MS-DOS 400K Single Side",
         "Linux 1.44M",
         "BSD 1.44M",
         "Amiga 880K",
@@ -105,12 +105,12 @@ default = "3.5-inch 1.44M"
     images = [
         "IBM ED 2.88M",
         "IBM ED 3.12M",
-        "IBM HD 1.44M",
-        "IBM HD 1.6M",
-        "IBM DD 720K",
-        "IBM DD 800K",
-        "IBM DD 360K Single Side",
-        "IBM DD 400K Single Side",
+        "MS-DOS 1.44M",
+        "MS-DOS 1.6M",
+        "MS-DOS 720K",
+        "MS-DOS 800K",
+        "MS-DOS 360K Single Side",
+        "MS-DOS 400K Single Side",
         "Linux 1.44M",
         "BSD 1.44M",
         "Amiga 880K",
@@ -121,40 +121,40 @@ default = "3.5-inch 1.44M"
 # Array of built-in images for 'format' command
 #
 [[image]]
-    name = "IBM DD 160K Single Side"
+    name = "MS-DOS 160K Single Side"
     file = "fat160.img"
 [[image]]
-    name = "IBM DD 180K Single Side"
+    name = "MS-DOS 180K Single Side"
     file = "fat180.img"
 [[image]]
-    name = "IBM DD 360K Single Side"
+    name = "MS-DOS 360K Single Side"
     file = "fat360.img"
 [[image]]
-    name = "IBM DD 400K Single Side"
+    name = "MS-DOS 400K Single Side"
     file = "fat400.img"
 [[image]]
-    name = "IBM DD 320K"
+    name = "MS-DOS 320K"
     file = "fat320.img"
 [[image]]
-    name = "IBM DD 360K"
+    name = "MS-DOS 360K"
     file = "fat360.img"
 [[image]]
-    name = "IBM DD 400K"
+    name = "MS-DOS 400K"
     file = "fat400.img"
 [[image]]
-    name = "IBM DD 720K"
+    name = "MS-DOS 720K"
     file = "fat720.img"
 [[image]]
-    name = "IBM DD 800K"
+    name = "MS-DOS 800K"
     file = "fat800.img"
 [[image]]
-    name = "IBM HD 1.2M"
+    name = "MS-DOS 1.2M"
     file = "fat1.2.img"
 [[image]]
-    name = "IBM HD 1.44M"
+    name = "MS-DOS 1.44M"
     file = "fat1.44.img"
 [[image]]
-    name = "IBM HD 1.6M"
+    name = "MS-DOS 1.6M"
     file = "fat1.6.img"
 [[image]]
     name = "IBM ED 2.88M"

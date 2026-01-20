@@ -17,7 +17,7 @@ var eraseCmd = &cobra.Command{
 		if floppyAdapter == nil {
 			cobra.CheckErr(fmt.Errorf("adapter not available"))
 		}
-		fmt.Printf("Erasing %d tracks, %d side(s)\n", config.Cyls + 2, config.Heads)
+		fmt.Printf("Erasing %d tracks, %d side(s)\n", config.Cyls+2, config.Heads)
 		fmt.Printf("\n")
 
 		// Prompt user to insert diskette

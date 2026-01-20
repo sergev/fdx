@@ -22,6 +22,7 @@ var (
 	RPM       int
 	MaxKBps   int
 	Images    []string
+	ImageMap  map[string]string // image name -> filename mapping
 )
 
 // Config represents the entire TOML configuration structure
@@ -146,9 +147,12 @@ func Initialize() error {
 	copy(Images, foundDrive.Images)
 
 	// 9. Verify each item in images array exists in image array
+	// and build ImageMap for looking up filenames by image name
 	imageMap := make(map[string]bool)
+	ImageMap = make(map[string]string)
 	for _, img := range conf.Image {
 		imageMap[img.Name] = true
+		ImageMap[img.Name] = img.File
 	}
 
 	for _, imgName := range foundDrive.Images {
@@ -158,4 +162,14 @@ func Initialize() error {
 	}
 
 	return nil
+}
+
+// GetImageFilename returns the filename for a given image name.
+// Returns an error if the image name is not found in the configuration.
+func GetImageFilename(imageName string) (string, error) {
+	filename, ok := ImageMap[imageName]
+	if !ok {
+		return "", fmt.Errorf("image %q not found in configuration", imageName)
+	}
+	return filename, nil
 }

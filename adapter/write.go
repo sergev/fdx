@@ -49,16 +49,16 @@ Supported image formats:
 		// Match image versus drive.
 		if int(disk.Header.BitRate) > config.MaxKBps {
 			cobra.CheckErr(fmt.Errorf("Image with bit rate %d kbps is incompatible with drive %s",
-								      disk.Header.BitRate, config.DriveName))
+				disk.Header.BitRate, config.DriveName))
 		}
 		if int(disk.Header.NumberOfSide) > config.Heads {
 			cobra.CheckErr(fmt.Errorf("Image with %d sides is incompatible with drive %s",
-								      disk.Header.NumberOfSide, config.DriveName))
+				disk.Header.NumberOfSide, config.DriveName))
 		}
 
 		// Get number of tracks to write (but no more than extra 2 tracks)
 		numCylinders := int(disk.Header.NumberOfTrack)
-		if numCylinders > config.Cyls + 2 {
+		if numCylinders > config.Cyls+2 {
 			numCylinders = config.Cyls + 2
 		}
 		if hfe.DetectImageFormat(filename) != hfe.ImageFormatHFE {

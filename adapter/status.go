@@ -3,8 +3,8 @@ package adapter
 import (
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"github.com/sergev/floppy/config"
+	"github.com/spf13/cobra"
 )
 
 var statusCmd = &cobra.Command{
