@@ -12,6 +12,7 @@ const (
 	// ImageFormatUnknown represents an unknown or unrecognized format
 	ImageFormatUnknown ImageFormat = iota
 	ImageFormatADF                 // ADF format - Amiga Disk File
+	ImageFormatBKD                 // BKD format - Disk image for BK-0010 or BK-0011M
 	ImageFormatCP2                 // CP2 format - Central Point Software's Copy-II-PC
 	ImageFormatDCF                 // DCF format - Disk Copy Fast utility
 	ImageFormatEPL                 // EPL format - EPLCopy utility
@@ -31,6 +32,8 @@ func (f ImageFormat) String() string {
 	switch f {
 	case ImageFormatADF:
 		return "ADF"
+	case ImageFormatBKD:
+		return "BKD"
 	case ImageFormatCP2:
 		return "CP2"
 	case ImageFormatDCF:
@@ -75,6 +78,8 @@ func DetectImageFormat(filename string) ImageFormat {
 	switch ext {
 	case "adf":
 		return ImageFormatADF
+	case "bkd":
+		return ImageFormatBKD
 	case "cp2":
 		return ImageFormatCP2
 	case "dcf":
