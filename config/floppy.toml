@@ -173,4 +173,4 @@ default = "3.5-inch 1.44M"
     file = "blank.adf"
 [[image]]
     name = "BK-0010 800K"
-    file = "blank.bkd"
+    file = "andos.bkd"
