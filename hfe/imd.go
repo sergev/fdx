@@ -14,6 +14,12 @@ const (
 	imdCommentTerminator = 0x1A
 )
 
+// IMDImage represents a complete IMD file
+type IMDImage struct {
+	Comment []byte     // Comment block (until 0x1A)
+	Tracks  []IMDTrack // Track records
+}
+
 // IMDTrack represents a single track in IMD format
 type IMDTrack struct {
 	Mode      byte   // Data rate and encoding (0-5)
@@ -101,19 +107,23 @@ func calculateFlag(compressed, deleted, bad bool) byte {
 	return flag
 }
 
-// decodeFlag decodes a sector flag byte into status flags
+// Decode a sector flag byte into status flags
+// According to IMD spec examples:
+// - 0x01 = Normal data, not compressed
+// - 0x02 = Compressed data (all bytes same)
+// - 0x03 = Normal data with deleted address mark
+// - 0x05 = Normal data, bad sector
+// - 0x06 = Compressed data, bad sector (0x02 | 0x04)
+// - 0x07 = Compressed data, deleted address mark, bad sector
 func decodeFlag(flag byte) (compressed, deleted, bad bool) {
-	if flag == 0 {
-		return false, false, false // No data
-	}
-	compressed = (flag & 0x01) != 0
-	deleted = (flag & 0x02) != 0
-	bad = (flag & 0x04) != 0
+	compressed = flag == 0x02 || flag == 0x06 || flag == 0x07 // Compressed data
+	deleted = flag == 0x03 || flag == 0x07                    // Deleted address mark
+	bad = flag == 0x05 || flag == 0x06 || flag == 0x07        // Bad sector
 	return
 }
 
-// ReadIMD reads a file in IMD format and returns a Disk structure.
-func ReadIMD(filename string) (*Disk, error) {
+// ReadIMDFile reads a file in IMD format and returns an IMDImage structure.
+func ReadIMDFile(filename string) (*IMDImage, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
@@ -168,22 +178,68 @@ func ReadIMD(filename string) (*Disk, error) {
 		return nil, fmt.Errorf("no tracks with sectors found in IMD file")
 	}
 
-	// Convert IMD tracks to Disk structure
-	// For now, we'll create a basic Disk structure
-	// Full MFM encoding would require more complex conversion
+	return &IMDImage{
+		Comment: comment,
+		Tracks:  tracks,
+	}, nil
+}
+
+// ConvertIMDToHFE converts an IMDImage structure to HFE Disk structure.
+func ConvertIMDToHFE(img *IMDImage) (*Disk, error) {
+	if len(img.Tracks) == 0 {
+		return nil, fmt.Errorf("no tracks in IMD image")
+	}
+
+	// Determine disk geometry from tracks
+	// Find maximum cylinder and head values
+	maxCylinder := byte(0)
+	maxHead := byte(0)
+	for _, track := range img.Tracks {
+		if track.Cylinder > maxCylinder {
+			maxCylinder = track.Cylinder
+		}
+		headNum := track.Head & 0x0F
+		if headNum > maxHead {
+			maxHead = headNum
+		}
+	}
+
+	// Determine bit rate and encoding from first track with sectors
+	bitRate := uint16(250)
+	encoding := uint8(ENC_ISOIBM_MFM)
+	for _, track := range img.Tracks {
+		if track.Nsec > 0 {
+			rate, mfm, err := modeToRateDensity(track.Mode)
+			if err == nil {
+				bitRate = uint16(rate)
+				if mfm {
+					encoding = uint8(ENC_ISOIBM_MFM)
+				} else {
+					encoding = uint8(ENC_ISOIBM_FM)
+				}
+			}
+			break
+		}
+	}
+
+	// Calculate number of tracks (cylinders) and sides
+	numTracks := maxCylinder + 1
+	numSides := maxHead + 1
+
+	// Create Disk structure
 	disk := &Disk{
 		Header: Header{
-			NumberOfTrack:       uint8(len(tracks)),
-			NumberOfSide:        2, // Assume double-sided for now
-			TrackEncoding:       ENC_ISOIBM_MFM,
-			BitRate:             500,
+			NumberOfTrack:       numTracks,
+			NumberOfSide:        numSides,
+			TrackEncoding:       encoding,
+			BitRate:             bitRate,
 			FloppyRPM:           300,
 			FloppyInterfaceMode: IFM_IBMPC_HD,
 			WriteProtected:      0xFF,
 			WriteAllowed:        0xFF,
 			SingleStep:          0xFF,
 		},
-		Tracks: make([]TrackData, len(tracks)),
+		Tracks: make([]TrackData, numTracks),
 	}
 
 	// TODO: Convert IMD sector data to MFM bitstreams
@@ -195,10 +251,19 @@ func ReadIMD(filename string) (*Disk, error) {
 		}
 	}
 
-	_ = comment // Comment is read but not used in conversion yet
-	_ = tracks  // Tracks are read but conversion to MFM is not yet implemented
+	_ = img.Comment // Comment is read but not used in conversion yet
 
 	return disk, nil
+}
+
+// ReadIMD reads a file in IMD format and returns a Disk structure.
+// This is a backward compatibility wrapper that calls ReadIMDFile() and ConvertIMDToHFE().
+func ReadIMD(filename string) (*Disk, error) {
+	img, err := ReadIMDFile(filename)
+	if err != nil {
+		return nil, err
+	}
+	return ConvertIMDToHFE(img)
 }
 
 // readIMDTrack reads a single track record from IMD file
@@ -228,9 +293,8 @@ func readIMDTrack(file *os.File) (IMDTrack, error) {
 	if track.Mode > 5 {
 		return track, fmt.Errorf("invalid mode value: %d (must be 0-5)", track.Mode)
 	}
-	if (track.Head & 0x0F) > 1 {
-		return track, fmt.Errorf("invalid head value: %d (must be 0-1)", track.Head&0x0F)
-	}
+	// Head value validation - lower 4 bits contain head number (typically 0-1, but allow up to 15)
+	// Upper bits contain flags (0x40 for Head Map, 0x80 for Cylinder Map)
 	if track.Ssize > 6 {
 		return track, fmt.Errorf("invalid sector size value: %d (must be 0-6)", track.Ssize)
 	}
