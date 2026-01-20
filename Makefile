@@ -1,6 +1,3 @@
-#
-# Gisp interpreter
-#
 PROG    = floppy
 DESTDIR	= $(HOME)/.local
 
