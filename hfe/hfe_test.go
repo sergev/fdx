@@ -2,6 +2,7 @@ package hfe
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"github.com/sergev/floppy/mfm"
 	"io"
@@ -585,6 +586,7 @@ func getTestDataPath(filename string) string {
 
 // findSampleFile searches for a sample file in multiple possible locations
 // and returns the found path, or skips the test if not found
+// Also checks for .gz versions of the file
 func findSampleFile(t *testing.T, filename string) string {
 	t.Helper()
 	wd, err := os.Getwd()
@@ -596,6 +598,10 @@ func findSampleFile(t *testing.T, filename string) string {
 		filepath.Join(wd, "images", filename),
 		filepath.Join(wd, "..", "images", filename),
 		filepath.Join("images", filename),
+		// Also check for .gz versions
+		filepath.Join(wd, "images", filename+".gz"),
+		filepath.Join(wd, "..", "images", filename+".gz"),
+		filepath.Join("images", filename+".gz"),
 	}
 
 	for _, path := range possiblePaths {
@@ -606,6 +612,49 @@ func findSampleFile(t *testing.T, filename string) string {
 
 	t.Skipf("Sample file %s not found in any of: %v", filename, possiblePaths)
 	return ""
+}
+
+// decompressFile decompresses a gzip file to a temporary location if needed
+// Returns the path to the decompressed file (temporary file for .gz, original path otherwise)
+// The caller is responsible for cleanup (using t.TempDir() or similar)
+func decompressFile(t *testing.T, filePath string) string {
+	t.Helper()
+
+	// Check if file is gzip compressed
+	if !strings.HasSuffix(filePath, ".gz") {
+		return filePath
+	}
+
+	// Open the compressed file
+	compressedFile, err := os.Open(filePath)
+	if err != nil {
+		t.Fatalf("Failed to open compressed file %s: %v", filePath, err)
+	}
+	defer compressedFile.Close()
+
+	// Create gzip reader
+	gzReader, err := gzip.NewReader(compressedFile)
+	if err != nil {
+		t.Fatalf("Failed to create gzip reader for %s: %v", filePath, err)
+	}
+	defer gzReader.Close()
+
+	// Create temporary file for decompressed data
+	tmpFile, err := os.CreateTemp(t.TempDir(), "decompressed_*.adf")
+	if err != nil {
+		t.Fatalf("Failed to create temporary file: %v", err)
+	}
+	defer tmpFile.Close()
+
+	// Copy decompressed data to temporary file
+	_, err = io.Copy(tmpFile, gzReader)
+	if err != nil {
+		t.Fatalf("Failed to decompress file %s: %v", filePath, err)
+	}
+
+	// Close and return the path
+	tmpFile.Close()
+	return tmpFile.Name()
 }
 
 // testReadSampleFile is a parameterized helper for reading and validating sample files
@@ -1432,8 +1481,11 @@ func TestCountSectorsAmiga(t *testing.T) {
 		return // Test was skipped
 	}
 
+	// Decompress if needed (returns original path if not compressed)
+	decompressedFile := decompressFile(t, sampleFile)
+
 	// Load the ADF file
-	disk, err := ReadADF(sampleFile)
+	disk, err := ReadADF(decompressedFile)
 	if err != nil {
 		t.Fatalf("ReadADF() error: %v", err)
 	}
