@@ -115,6 +115,16 @@ func TestReadIMDFile(t *testing.T) {
 	if len(img.Comment) != 50 {
 		t.Errorf("Comment length = %d, expected 50", len(img.Comment))
 	}
+
+	// RPM validation - should be calculated from track structure
+	if img.FloppyRPM != 300 && img.FloppyRPM != 360 {
+		t.Errorf("FloppyRPM = %d, expected 300 or 360", img.FloppyRPM)
+	}
+	// For fat360.imd (9 sectors, 512 bytes, mode 5 = 250 kbps), should be 300 RPM
+	expectedRPM := uint16(300)
+	if img.FloppyRPM != expectedRPM {
+		t.Errorf("FloppyRPM = %d, expected %d", img.FloppyRPM, expectedRPM)
+	}
 	expectedCommentStart := "IMD 1.17: 19/01/2026 20:15:13\r"
 	if !strings.HasPrefix(string(img.Comment), expectedCommentStart) {
 		t.Errorf("Comment does not start with expected text. Got: %q", string(img.Comment[:min(len(img.Comment), 30)]))

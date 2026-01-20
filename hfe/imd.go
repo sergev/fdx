@@ -16,8 +16,9 @@ const (
 
 // IMDImage represents a complete IMD file
 type IMDImage struct {
-	Comment []byte     // Comment block (until 0x1A)
-	Tracks  []IMDTrack // Track records
+	Comment   []byte     // Comment block (until 0x1A)
+	Tracks    []IMDTrack // Track records
+	FloppyRPM uint16     // Floppy disk rotation speed (typically 300 or 360 RPM)
 }
 
 // IMDTrack represents a single track in IMD format
@@ -178,9 +179,53 @@ func ReadIMDFile(filename string) (*IMDImage, error) {
 		return nil, fmt.Errorf("no tracks with sectors found in IMD file")
 	}
 
+	// Calculate FloppyRPM from track structure
+	// Find first track with sectors to determine bit rate and estimate RPM
+	var floppyRPM uint16 = 300 // Default to 300 RPM (most common)
+	for _, track := range tracks {
+		if track.Nsec > 0 {
+			rate, _, err := modeToRateDensity(track.Mode)
+			if err == nil && rate > 0 {
+				// Calculate approximate track capacity in bits (sector data only)
+				// Note: Actual MFM bitstream includes sync, address marks, gaps, etc.,
+				// but this gives us a reasonable estimate for RPM calculation
+				sectorSize := imdSectorSize(track.Ssize)
+				if sectorSize > 0 {
+					// Track data capacity = number of sectors × sector size × 8 bits
+					trackDataBits := uint32(track.Nsec) * uint32(sectorSize) * 8
+
+					// Estimate full track bitstream length (include MFM overhead)
+					// MFM encoding and overhead typically adds ~20-30% to sector data
+					// Use a conservative estimate: multiply by 1.5 for overhead
+					estimatedTrackBits := trackDataBits * 3 / 2
+
+					if estimatedTrackBits > 0 {
+						// RPM calculation based on HFE formula:
+						// RPM = (60 × bit rate × 2000) / trackBits
+						// This calculates RPM from bit rate and track capacity
+						calculatedRPM := (60 * uint32(rate) * 2000) / estimatedTrackBits
+
+						// Round to standard floppy RPM values (300 or 360)
+						// Most floppy drives run at 300 RPM, some older ones at 360 RPM
+						// Use 330 RPM as threshold (midpoint between 300 and 360)
+						if calculatedRPM >= 250 && calculatedRPM <= 400 {
+							if calculatedRPM < 330 {
+								floppyRPM = 300
+							} else {
+								floppyRPM = 360
+							}
+						}
+					}
+				}
+			}
+			break
+		}
+	}
+
 	return &IMDImage{
-		Comment: comment,
-		Tracks:  tracks,
+		Comment:   comment,
+		Tracks:    tracks,
+		FloppyRPM: floppyRPM,
 	}, nil
 }
 
@@ -233,7 +278,7 @@ func ConvertIMDToHFE(img *IMDImage) (*Disk, error) {
 			NumberOfSide:        numSides,
 			TrackEncoding:       encoding,
 			BitRate:             bitRate,
-			FloppyRPM:           300,
+			FloppyRPM:           img.FloppyRPM,
 			FloppyInterfaceMode: IFM_IBMPC_HD,
 			WriteProtected:      0xFF,
 			WriteAllowed:        0xFF,
