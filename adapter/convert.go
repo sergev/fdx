@@ -14,27 +14,8 @@ var convertCmd = &cobra.Command{
 Reads contents of the SRC.EXT file and writes it to DEST.EXT file.
 Format of floppy image is defined by extension.
 USB adapter is not used.
-Supported image formats:
-    *.adf          - Amiga Disk File
-    *.hfe          - HxC Floppy Emulator
-    *.img or *.ima - raw binary contents of the entire disk`,
-	// TODO: bkd        - BK-0010/0011M Disk image
-	// TODO: cp2        - Central Point Software's Copy-II-PC
-	// TODO: dcf        - Disk Copy Fast utility
-	// TODO: epl        - EPLCopy utility
-	// TODO: imd        - Dave Dunfield's ImageDisk utility
-	// TODO: mfm        - low-level MFM encoded bit stream
-	// TODO: pdi        - Upland's PlanetPress
-	// TODO: pri        - PCE Raw Image
-	// TODO: psi        - PCE Sector Image
-	// TODO: scp        - SuperCard Pro low-level raw magnetic flux transitions
-	// TODO: td0        - Teledisk
-
+` + supportedImageFormatsText,
 	Args: cobra.ExactArgs(2),
-	// Override PersistentPreRun to skip USB adapter initialization
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		// Do nothing - convert command doesn't need USB adapter
-	},
 	Run: func(cmd *cobra.Command, args []string) {
 		srcFilename := args[0]
 		destFilename := args[1]
