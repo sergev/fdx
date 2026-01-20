@@ -17,6 +17,8 @@ func Read(filename string) (*Disk, error) {
 		return ReadHFE(filename)
 	case ImageFormatADF:
 		return ReadADF(filename)
+	case ImageFormatBKD:
+		return ReadBKD(filename)
 	case ImageFormatCP2:
 		return ReadCP2(filename)
 	case ImageFormatDCF:

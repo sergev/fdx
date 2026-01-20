@@ -14,6 +14,8 @@ func Write(filename string, disk *Disk) error {
 		return WriteHFE(filename, disk, HFEVersion1)
 	case ImageFormatADF:
 		return WriteADF(filename, disk)
+	case ImageFormatBKD:
+		return WriteBKD(filename, disk)
 	case ImageFormatCP2:
 		return WriteCP2(filename, disk)
 	case ImageFormatDCF:

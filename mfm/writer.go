@@ -132,19 +132,15 @@ func (w *Writer) getData() []byte {
 	return w.buffer
 }
 
-// Encode a track in IBM PC format
+// Encode a track in IBM format
 // sectors: array of sector data (512 bytes each), indexed by sector number
 // cylinder: cylinder number (0-based)
 // head: head number (0 or 1)
 // sectorsPerTrack: number of sectors per track
+// bitRate: bit rate in kbps
+// skipIndexMark: if true, skip the index marker (used for BKD format)
 //
-// Track layout for IBM PC floppies
-// ┌─────┬──────┬────┬···┬──────┬──────┬────┬──────┬────┬────┬···┬─────┐
-// │gap4a│Index │gap1│   │Sector│Sector│gap2│Data  │Data│gap3│   │gap4b│
-// │(80) │Marker│(50)│   │Marker│Header│(22)│Marker│+CRC│    │   │     │
-// └─────┴──────┴────┴···┴──────┴──────┴────┴──────┴────┴────┴···┴─────┘
-//                     └───────────────repeat──────────────────┘
-func (w *Writer) EncodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int, bitRate uint16) []byte {
+func (w *Writer) encodeTrackIBMInternal(sectors [][]byte, cylinder, head, sectorsPerTrack int, bitRate uint16, skipIndexMark bool) []byte {
 
 	const startGap = 80 // gap4a: empty bytes before index marker
 	const indexGap = 50 // gap1: empty bytes before first sector
@@ -152,9 +148,11 @@ func (w *Writer) EncodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTr
 	// Compute gap2 and gap3 based on bit rate and sectorsPerTrack.
 	headerGap, sectorGap := computeGapsIBMPC(bitRate, sectorsPerTrack)
 
-	// Index (before first sector)
-	w.writeGap(startGap)
-	w.writeIndexMarker()
+	// Index (before first sector) - optionally skip the index marker
+	if !skipIndexMark {
+		w.writeGap(startGap)
+		w.writeIndexMarker()
+	}
 	w.writeGap(indexGap)
 
 	// Write each sector
@@ -209,6 +207,26 @@ func (w *Writer) EncodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTr
 		w.writeGap(fillGap)
 	}
 	return w.getData()
+}
+
+// Track layout for IBM PC floppies
+// ┌─────┬──────┬────┬···┬──────┬──────┬────┬──────┬────┬────┬···┬─────┐
+// │gap4a│Index │gap1│   │Sector│Sector│gap2│Data  │Data│gap3│   │gap4b│
+// │(80) │Marker│(50)│   │Marker│Header│(22)│Marker│+CRC│    │   │     │
+// └─────┴──────┴────┴···┴──────┴──────┴────┴──────┴────┴────┴···┴─────┘
+//                     └───────────────repeat──────────────────┘
+func (w *Writer) EncodeTrackIBMPC(sectors [][]byte, cylinder, head, sectorsPerTrack int, bitRate uint16) []byte {
+	return w.encodeTrackIBMInternal(sectors, cylinder, head, sectorsPerTrack, bitRate, false)
+}
+
+// Track layout for BK-0010 and BK-0011M floppies
+// ┌────┬···┬──────┬──────┬────┬──────┬────┬────┬···┬─────┐
+// │gap1│   │Sector│Sector│gap2│Data  │Data│gap3│   │gap4b│
+// │(50)│   │Marker│Header│(22)│Marker│+CRC│    │   │     │
+// └────┴···┴──────┴──────┴────┴──────┴────┴────┴···┴─────┘
+//        └───────────────repeat──────────────────┘
+func (w *Writer) EncodeTrackBK(sectors [][]byte, cylinder, head, sectorsPerTrack int, bitRate uint16) []byte {
+	return w.encodeTrackIBMInternal(sectors, cylinder, head, sectorsPerTrack, bitRate, true)
 }
 
 // Compute gap2 and gap3 based on bit rate and number of sectors per track.
