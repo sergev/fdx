@@ -44,7 +44,8 @@ Format of floppy image is defined by extension.
 		// Get number of tracks to write (but no more than extra 2 tracks)
 		numCylinders := int(disk.Header.NumberOfTrack)
 		if numCylinders > config.Cyls+2 {
-			numCylinders = config.Cyls + 2
+			cobra.CheckErr(fmt.Errorf("Image with %d cylinders is incompatible with drive %s",
+				numCylinders, config.DriveName))
 		}
 		if hfe.DetectImageFormat(filename) != hfe.ImageFormatHFE {
 			if numCylinders >= 80 {

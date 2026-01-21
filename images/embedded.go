@@ -26,6 +26,12 @@ var fat1_44ImgGz []byte
 //go:embed fat1.6.img.gz
 var fat1_6ImgGz []byte
 
+//go:embed fat2.88.img.gz
+var fat2_88ImgGz []byte
+
+//go:embed fat3.12.img.gz
+var fat3_12ImgGz []byte
+
 //go:embed fat160.img.gz
 var fat160ImgGz []byte
 
@@ -57,6 +63,8 @@ var imageMap = map[string][]byte{
 	"fat1.2.img.gz":    fat1_2ImgGz,
 	"fat1.44.img.gz":   fat1_44ImgGz,
 	"fat1.6.img.gz":    fat1_6ImgGz,
+	"fat2.88.img.gz":   fat2_88ImgGz,
+	"fat3.12.img.gz":   fat3_12ImgGz,
 	"fat160.img.gz":    fat160ImgGz,
 	"fat180.img.gz":    fat180ImgGz,
 	"fat320.img.gz":    fat320ImgGz,
