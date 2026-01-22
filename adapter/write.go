@@ -55,6 +55,7 @@ Format of floppy image is defined by extension.
 				numCylinders = 40
 			}
 		}
+		disk.InitVerifyOptions()
 		fmt.Printf("Writing %d tracks, %d side(s)\n", numCylinders, disk.Header.NumberOfSide)
 		fmt.Printf("Bit Rate: %d kbps\n", disk.Header.BitRate)
 		fmt.Printf("Rotation Speed: %d RPM\n", disk.Header.FloppyRPM)

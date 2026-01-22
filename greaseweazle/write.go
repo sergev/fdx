@@ -153,12 +153,6 @@ func (c *Client) Write(disk *hfe.Disk, numberOfTracks int) error {
 	// Iterate through cylinders and heads
 	for cyl := 0; cyl < numberOfTracks; cyl++ {
 		for head := 0; head < int(disk.Header.NumberOfSide); head++ {
-			// Print progress message
-			if cyl != 0 || head != 0 {
-				fmt.Printf("\rWriting track %d, side %d...", cyl, head)
-			} else {
-				fmt.Printf("Writing track %d, side %d...", cyl, head)
-			}
 
 			// Seek to cylinder
 			err = c.Seek(byte(cyl))
@@ -197,15 +191,64 @@ func (c *Client) Write(disk *hfe.Disk, numberOfTracks int) error {
 			// Encode flux transitions to flux stream format
 			fluxData := encodeFluxStream(transitions, c.firmwareInfo.SampleFreqHz)
 
-			// Write flux stream to floppy
-			err = c.WriteFlux(fluxData)
-			if err != nil {
-				// Check for write protection error
-				errMsg := err.Error()
-				if errMsg == "Greaseweazle error: write protected" || errMsg == "failed to send WRITE_FLUX command: Greaseweazle error: write protected" {
-					return fmt.Errorf("write protected: cannot write to disk")
+			// Retry several times
+			for retry := 0; ; retry++ {
+				if retry >= 5 {
+					return fmt.Errorf("failed to format track %d, side %d", cyl, head)
 				}
-				return fmt.Errorf("failed to write flux data for cylinder %d, head %d: %w", cyl, head, err)
+				fmt.Printf("\r  Writing track %d, side %d...", cyl, head)
+
+				// Write flux stream to floppy
+				err = c.WriteFlux(fluxData)
+				if err != nil {
+					// Check for write protection error
+					errMsg := err.Error()
+					if errMsg == "Greaseweazle error: write protected" || errMsg == "failed to send WRITE_FLUX command: Greaseweazle error: write protected" {
+						return fmt.Errorf("write protected: cannot write to disk")
+					}
+					// Failed to write flux data
+					fmt.Printf("Error\n")
+					continue
+				}
+
+				if disk.MustVerify() {
+					fmt.Printf("\rVerifying track %d, side %d...", cyl, head)
+
+					// Read flux data (2 revolutions)
+					fluxResult, err := c.ReadFlux(0, 2)
+					if err != nil {
+						// Failed to read flux data
+						fmt.Printf("Error\n")
+						continue
+					}
+
+					// Decode flux data to MFM bitstream
+					bitsResult, err := c.decodeFluxToMFM(fluxResult, disk.Header.BitRate)
+					if err != nil {
+						// Failed to decode flux data to MFM
+						fmt.Printf("Error\n")
+						continue
+					}
+
+					// Check flux status
+					err = c.GetFluxStatus()
+					if err != nil {
+						// Flux status error after reading
+						fmt.Printf("Error\n")
+						continue
+					}
+
+					// Compare data
+					err = disk.VerifyTrack(cyl, head, bitsResult)
+					if err != nil {
+						// Data mismatch
+						fmt.Printf("Error\n")
+						continue
+					}
+				}
+
+				// Track is good
+				break
 			}
 		}
 	}

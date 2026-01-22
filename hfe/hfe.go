@@ -95,8 +95,10 @@ type TrackData struct {
 
 // Disk represents a complete HFE v3 disk image
 type Disk struct {
-	Header Header
-	Tracks []TrackData
+	Header      Header
+	Tracks      []TrackData
+	VerifyIBMPC bool
+	VerifyAmiga bool
 }
 
 // byteBitsInverter inverts bits in a byte (for PIC EUSART compatibility)

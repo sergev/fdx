@@ -129,9 +129,6 @@ func WriteIMG(filename string, disk *Disk) error {
 	numCylinders := int(disk.Header.NumberOfTrack)
 	numHeads := int(disk.Header.NumberOfSide)
 	numSectorsPerTrack := countSectors(disk.Tracks[0].Side0)
-	if numSectorsPerTrack < 8 || (numSectorsPerTrack > 23 && numSectorsPerTrack != 36) {
-		return fmt.Errorf("invalid number of sectors per track: %d (valid values: 8-23, 36)", numSectorsPerTrack)
-	}
 
 	// Iterate through cylinders and heads
 	for cyl := 0; cyl < numCylinders; cyl++ {
