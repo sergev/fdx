@@ -367,34 +367,28 @@ func unshuffle(odd, even uint16) uint32 {
 	return word
 }
 
-// scanAmiga scans for Amiga sector markers (00-a1-a1-fx pattern).
-// Returns the tag byte after the marker, or error.
-func (r *Reader) scanAmiga() (int, error) {
+// Scan for Amiga sector marker.
+// Returns nil or error.
+func (r *Reader) scanAmiga() error {
 	history := uint32(0)
 
 	for {
-		bit, err := r.readBit()
+		bit, err := r.readHalfBit()
 		if err != nil {
-			return -1, err
+			return err
 		}
-
 		history = (history << 1) | uint32(bit)
-		history &= 0xffffffff
+		// fmt.Printf("--- 0x%08x, %d\n", history, bit)
 
-		// All ones - synchronize to half-bit
-		if history == 0xffffffff {
-			if _, err := r.readHalfBit(); err != nil {
-				return -1, err
-			}
-			history = 0
-			continue
-		}
-
-		// Amiga format: waiting for 00-a1-a1-fx
-		if (history & 0xfffffff0) == 0x00a1a1f0 {
-			// Found marker, read and return its tag
-			tag := history & 0xff
-			return int(tag), nil
+		// Amiga marker consists of two bytes of A1 violating encoding in the sixth bit.
+		// Pattern at MFM level:
+		// -----A----- -----1-----
+		//  1  0  1  0  0 *0* 0  1
+		// 01 00 01 00 10 00 10 01 = 4489
+		// 01 00 01 00 10 00 10 01 = 4489
+		if history == 0x44894489 {
+			// Found marker
+			return nil
 		}
 	}
 }
@@ -481,13 +475,17 @@ func (r *Reader) ReadSectorAmiga(track int) (int, []byte, error) {
 	data := make([]byte, sectorSize)
 
 	for {
-		// Scan for Amiga sector marker (returns tag byte)
-		tag, err := r.scanAmiga()
+		// Scan for Amiga sector marker
+		err := r.scanAmiga()
 		if err != nil {
 			return -1, nil, err
 		}
 
-		// Read identifier: tag is high byte of odd, then read 3 more bytes
+		// Read identifier
+		oddHigh, err := r.readByte()
+		if err != nil {
+			continue
+		}
 		oddLow, err := r.readByte()
 		if err != nil {
 			continue
@@ -501,7 +499,7 @@ func (r *Reader) ReadSectorAmiga(track int) (int, []byte, error) {
 			continue
 		}
 
-		odd := uint16(tag)<<8 | uint16(oddLow)
+		odd := uint16(oddHigh)<<8 | uint16(oddLow)
 		even := uint16(evenHigh)<<8 | uint16(evenLow)
 		ident := unshuffle(odd, even) & 0xffffff
 

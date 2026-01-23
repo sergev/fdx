@@ -66,9 +66,9 @@ func (w *Writer) writeByte(data byte) {
 }
 
 // Write n bytes of gap
-func (w *Writer) writeGap(n int) {
+func (w *Writer) writeGap(n int, value byte) {
 	for i := 0; i < n; i++ {
-		w.writeByte(0x4E) // standard gap byte
+		w.writeByte(value)
 	}
 }
 
@@ -150,10 +150,10 @@ func (w *Writer) encodeTrackIBMInternal(sectors [][]byte, cylinder, head, sector
 
 	// Index (before first sector) - optionally skip the index marker
 	if !skipIndexMark {
-		w.writeGap(startGap)
+		w.writeGap(startGap, 0x4E)
 		w.writeIndexMarker()
 	}
-	w.writeGap(indexGap)
+	w.writeGap(indexGap, 0x4E)
 
 	// Write each sector
 	for s := 0; s < sectorsPerTrack; s++ {
@@ -178,7 +178,7 @@ func (w *Writer) encodeTrackIBMInternal(sectors [][]byte, cylinder, head, sector
 		w.writeByte(byte(sum))
 
 		// Gap between sector mark and data
-		w.writeGap(headerGap)
+		w.writeGap(headerGap, 0x4E)
 
 		// Data marker
 		w.writeMarker(0xFB)
@@ -198,13 +198,13 @@ func (w *Writer) encodeTrackIBMInternal(sectors [][]byte, cylinder, head, sector
 		w.writeByte(byte(sum))
 
 		// Gap between sectors
-		w.writeGap(sectorGap)
+		w.writeGap(sectorGap, 0x4E)
 	}
 
 	// Fill remaining track
 	fillGap := w.maxHalfBits/8 - len(w.getData())
 	if fillGap > 0 {
-		w.writeGap(fillGap)
+		w.writeGap(fillGap, 0x4E)
 	}
 	return w.getData()
 }
@@ -391,7 +391,7 @@ func (w *Writer) EncodeTrackAmiga(sectors [][]byte, track int) []byte {
 	const gapSize = 150 // Gap before first sector
 
 	// Write gap
-	w.writeGap(gapSize)
+	w.writeGap(gapSize, 0)
 
 	// Write each sector
 	for s := 0; s < 11; s++ {
@@ -403,7 +403,7 @@ func (w *Writer) EncodeTrackAmiga(sectors [][]byte, track int) []byte {
 	// Fill remaining track
 	fillGap := w.maxHalfBits/8 - len(w.getData())
 	if fillGap > 0 {
-		w.writeGap(fillGap)
+		w.writeGap(fillGap, 0)
 	}
 
 	return w.getData()
