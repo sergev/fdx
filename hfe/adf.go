@@ -107,7 +107,7 @@ func ReadADF(filename string) (*Disk, error) {
 func WriteADF(filename string, disk *Disk) error {
 	// Validate disk geometry
 	numCylinders := int(disk.Header.NumberOfTrack)
-	if numCylinders != adfCylinders {
+	if numCylinders < adfCylinders {
 		return fmt.Errorf("invalid number of cylinders: %d (expected %d)", numCylinders, adfCylinders)
 	}
 	numHeads := int(disk.Header.NumberOfSide)
