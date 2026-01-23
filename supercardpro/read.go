@@ -165,8 +165,8 @@ func (c *Client) decodeFluxToMFM(fluxData *FluxData, bitRateKhz uint16) ([]byte,
 
 // readFlux reads flux data for the specified number of revolutions
 func (c *Client) readFlux(nrRevs uint) (*FluxData, error) {
-	// Prepare READFLUX command data: [nr_revs, 1] (1 = wait for index)
-	info := []byte{byte(nrRevs), 1}
+	// Prepare READFLUX command data: [nr_revs, 1] (1 = ignore index)
+	info := []byte{byte(nrRevs), 0}
 	err := c.scpSend(SCPCMD_READFLUX, info, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send READFLUX command: %w", err)
@@ -193,13 +193,16 @@ func (c *Client) readFlux(nrRevs uint) (*FluxData, error) {
 		fluxData.Info[i].NrBitcells = binary.BigEndian.Uint32(infoData[offset+4 : offset+8])
 		//fmt.Printf("--- %d: IndexTime = %d, NrBitcells = %d\n", i, fluxData.Info[i].IndexTime, fluxData.Info[i].NrBitcells)
 	}
-	NrBitcells := fluxData.Info[0].NrBitcells
+
+	// Dirty hack to copy all bitcells of one rotation
+	ignoreBitcells := fluxData.Info[0].NrBitcells * 95 / 100
+	NrBitcells := fluxData.Info[1].NrBitcells
 
 	// Prepare RAM transfer command: 2 uint32_t values in big-endian
 	// Offset: 0, Length: up to 512*1024
 	ramCmd := make([]byte, 8)
-	binary.BigEndian.PutUint32(ramCmd[0:4], 0)            // offset
-	binary.BigEndian.PutUint32(ramCmd[4:8], NrBitcells*2) // length
+	binary.BigEndian.PutUint32(ramCmd[0:4], ignoreBitcells*2) // offset
+	binary.BigEndian.PutUint32(ramCmd[4:8], NrBitcells*2)     // length
 
 	// Allocate buffer for flux data
 	fluxData.Data = make([]byte, NrBitcells*2)

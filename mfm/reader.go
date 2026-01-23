@@ -68,28 +68,36 @@ func (r *Reader) readByte() (byte, error) {
 // Scan for IBM PC sector markers
 // Return the tag byte after the marker, or error
 func (r *Reader) scanIBMPC() (int, error) {
-	history := uint32(0x13713713)
+	history := uint64(0)
 
 	for {
-		bit, err := r.readBit()
+		bit, err := r.readHalfBit()
 		if err != nil {
 			return -1, err
 		}
+		history = (history << 1) | uint64(bit)
+		history &= 0xffff_ffff_ffff
+		//fmt.Printf("--- 0x%012x, %d\n", history, bit)
 
-		history = (history << 1) | uint32(bit)
-		history &= 0xffffffff
+		// Three bytes of A1 violating encoding in the sixth bit.
+		// Pattern at MFM level:
+		// -----A----- -----1-----
+		//  1  0  1  0  0 *0* 0  1
+		// 01 00 01 00 10 00 10 01 = 4489
+		// 01 00 01 00 10 00 10 01 = 4489
+		// 01 00 01 00 10 00 10 01 = 4489
 
-		// All ones - synchronize to half-bit
-		if history == 0xffffffff {
-			if _, err := r.readHalfBit(); err != nil {
-				return -1, err
-			}
-			history = 0
-			continue
-		}
+		// Three bytes of C2 violating encoding in the sixth bit.
+		// Pattern at MFM level:
+		// -----C----- -----2-----
+		//  1  1  0  0  0 *0* 1  0
+		// 01 01 00 10 10 00 01 00 = 5284
+		// 01 01 00 10 10 00 01 00 = 5284
+		// 01 01 00 10 10 00 01 00 = 5284
+		// Pattern from C code: 1, 1, 0, 0, 0, [half-bit], [half-bit], 1, 0
+		// This encodes C2 (11000010) but with violations
 
-		// IBM PC format: waiting for 00-a1-a1-a1 or 00-c2-c2-c2
-		if history == 0x00a1a1a1 || history == 0x00c2c2c2 {
+		if history == 0x4489_4489_4489 || history == 0x5284_5284_5284 {
 			// Found marker, read and return its tag
 			tag, err := r.readByte()
 			if err != nil {
